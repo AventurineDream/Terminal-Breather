@@ -187,7 +187,6 @@ Item {
     Rectangle {
       anchors.fill: parent
       color: Color.menu.background
-      opacity: 0.96
     }
 
     Item {

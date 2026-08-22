@@ -2,6 +2,11 @@
 
 Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plugin (Omarchy 4 "Quattro" or later). A fullscreen visual pacer — a circle that grows as you breathe in and shrinks as you breathe out — so the eyes lead the breath and the mind has one thing to come back to.
 
+<p align="center">
+  <img src="screenshots/breathe.png" alt="Fullscreen breathing pacer" width="46%" />
+  <img src="screenshots/panel.png" alt="Bar panel with weekly practice view" width="26%" />
+</p>
+
 - **Breathing pacer** (fullscreen overlay) — pick a pattern, pick a length, breathe. Phase name and a countdown digit ride along; the desktop is fully hidden for the duration.
 - **Bar widget** — an ensō in the bar: click to choose pattern and length, middle-click to start your usual session immediately. The tooltip carries your daily streak, the panel a seven-day practice view.
 - **Session tracking** — minutes per day in `~/.local/state/omarchy/zen/stats.json`. Ending early still logs the minutes you actually practiced: a streak kept by a short session beats one lost to perfectionism.
