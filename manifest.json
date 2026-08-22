@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "luotao.zen",
+  "name": "Zen",
+  "version": "0.1.0",
+  "author": "Luo Tao <luotao@hey.com>",
+  "license": "MIT",
+  "description": "Guided-breathing meditation for the Omarchy shell: a fullscreen visual breathing pacer (box, 4-7-8, coherent) with session tracking and a daily streak in the bar.",
+  "kinds": [
+    "bar-widget",
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "overlay": "BreatheOverlay.qml"
+  },
+  "barWidget": {
+    "displayName": "Zen",
+    "description": "Start a guided-breathing session; shows your daily meditation streak.",
+    "category": "Wellness",
+    "aliases": [
+      "zen",
+      "meditation",
+      "breathe",
+      "breathing",
+      "mindfulness",
+      "box breathing",
+      "4-7-8"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "pattern": "box",
+      "minutes": 10
+    },
+    "schema": [
+      {
+        "key": "pattern",
+        "type": "string",
+        "label": "Default breathing pattern (box, 478, coherent)",
+        "defaultValue": "box"
+      },
+      {
+        "key": "minutes",
+        "type": "integer",
+        "label": "Default session length (minutes)",
+        "min": 1,
+        "max": 120,
+        "step": 1,
+        "defaultValue": 10
+      }
+    ]
+  }
+}
