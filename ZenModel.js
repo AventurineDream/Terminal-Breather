@@ -127,6 +127,43 @@ function statsSummary(stats, todayKey) {
   return parts.length ? parts.join(" · ") : "No sessions yet"
 }
 
+// Last 7 days (oldest first) for the weekly practice view: single-letter
+// weekday label, minutes practiced, and whether the column is today.
+function weekSeries(stats, todayKey) {
+  var letters = ["S", "M", "T", "W", "T", "F", "S"]
+  var out = []
+  for (var i = 6; i >= 0; i--) {
+    var key = dayKeyOffset(todayKey, -i)
+    var parts = key.split("-")
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
+    out.push({
+      key: key,
+      label: letters[d.getDay()],
+      minutes: Number(stats.days[key]) || 0,
+      isToday: i === 0
+    })
+  }
+  return out
+}
+
+function weekTotal(series) {
+  var total = 0
+  for (var i = 0; i < series.length; i++) total += series[i].minutes
+  return total
+}
+
+// Argv for playing a session bell; prefers pw-play (PipeWire) and falls back
+// to paplay, exiting quietly when neither exists.
+function bellCommand(soundFile) {
+  return [
+    "sh", "-c",
+    'f="$1"; [ -f "$f" ] || exit 0; ' +
+    'if command -v pw-play >/dev/null 2>&1; then exec pw-play "$f"; ' +
+    'elif command -v paplay >/dev/null 2>&1; then exec paplay "$f"; fi',
+    "sh", soundFile
+  ]
+}
+
 // Argv for persisting the stats file; JSON travels as a positional arg so it
 // is data to the shell, never syntax.
 function persistStatsCommand(path, stats) {

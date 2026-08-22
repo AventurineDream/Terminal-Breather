@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "luotao.zen",
   "name": "Zen",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Luo Tao <luotao@hey.com>",
   "license": "MIT",
   "description": "Guided-breathing meditation for the Omarchy shell: a fullscreen visual breathing pacer (box, 4-7-8, coherent) with session tracking and a daily streak in the bar.",
@@ -32,9 +32,23 @@
     "defaultSection": "right",
     "defaults": {
       "pattern": "box",
-      "minutes": 10
+      "minutes": 10,
+      "bell": true,
+      "dnd": true
     },
     "schema": [
+      {
+        "key": "bell",
+        "type": "boolean",
+        "label": "Bell at session start and end",
+        "defaultValue": true
+      },
+      {
+        "key": "dnd",
+        "type": "boolean",
+        "label": "Do not disturb during sessions",
+        "defaultValue": true
+      },
       {
         "key": "pattern",
         "type": "string",

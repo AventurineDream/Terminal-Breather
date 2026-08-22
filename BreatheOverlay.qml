@@ -37,6 +37,41 @@ Item {
   property double nowMs: Date.now()
   property var stats: Model.parseStats("")
 
+  // Session comforts, set per-summon via payload ("bell": false, "dnd":
+  // false to opt out). DND is borrowed, not owned: it engages only if it
+  // was off, and whatever state the user had is restored afterwards.
+  property bool bellWanted: true
+  property bool dndWanted: true
+  property bool dndApplied: false
+
+  function notificationService() {
+    return root.shell && typeof root.shell.serviceFor === "function"
+      ? root.shell.serviceFor("omarchy.notifications") : null
+  }
+
+  function applyDnd() {
+    if (!dndWanted || dndApplied) return
+    var svc = notificationService()
+    if (!svc || typeof svc.setDoNotDisturb !== "function") return
+    if (svc.doNotDisturb === true) return
+    svc.setDoNotDisturb(true)
+    dndApplied = true
+    Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
+  }
+
+  function restoreDnd() {
+    if (!dndApplied) return
+    dndApplied = false
+    var svc = notificationService()
+    if (svc && typeof svc.setDoNotDisturb === "function") svc.setDoNotDisturb(false)
+    Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
+  }
+
+  function ring(soundFile) {
+    if (!bellWanted) return
+    Quickshell.execDetached(Model.bellCommand("/usr/share/sounds/freedesktop/stereo/" + soundFile))
+  }
+
   readonly property double elapsedSecs: startedAt > 0 ? Math.max(0, (nowMs - startedAt) / 1000) : 0
   readonly property double remainingSecs: Math.max(0, totalSecs - elapsedSecs)
   readonly property var breath: Model.breathAt(pattern, elapsedSecs)
@@ -53,20 +88,26 @@ Item {
     var minutes = Number(payload.minutes)
     if (!isFinite(minutes) || minutes <= 0) minutes = 10
     root.totalSecs = Math.max(10, Math.round(minutes * 60))
+    root.bellWanted = payload.bell !== false
+    root.dndWanted = payload.dnd !== false
 
     root.nowMs = Date.now()
     root.startedAt = root.nowMs
     root.opened = true
     statsFile.reload()
+    root.applyDnd()
+    root.ring("bell.oga")
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function close() {
     root.opened = false
+    root.restoreDnd()
   }
 
   function dismiss() {
     root.opened = false
+    root.restoreDnd()
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "luotao.zen")
   }
@@ -79,6 +120,9 @@ Item {
   // Ending early still logs the minutes actually practiced — a streak kept
   // by a short session beats one lost to perfectionism.
   function endSession(completed) {
+    // DND back to the user's state before the completion notification, or
+    // the bell we just rang announces a notification nobody sees.
+    root.restoreDnd()
     var minutes = Math.floor(root.elapsedSecs / 60)
     if (completed) minutes = Math.max(1, Math.round(root.totalSecs / 60))
     if (minutes >= 1) {
@@ -87,6 +131,7 @@ Item {
       Quickshell.execDetached(Model.persistStatsCommand(root.statsPath, root.stats))
     }
     if (completed) {
+      root.ring("complete.oga")
       var summary = Model.statsSummary(root.stats, Qt.formatDateTime(new Date(), "yyyy-MM-dd"))
       Quickshell.execDetached([
         root.omarchyPath + "/bin/omarchy-notification-send",

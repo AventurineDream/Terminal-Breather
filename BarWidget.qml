@@ -48,7 +48,9 @@ Panel {
   function startSession(patternKey, minutes) {
     var payload = JSON.stringify({
       pattern: patternKey || chosenPattern,
-      minutes: minutes || chosenMinutes
+      minutes: minutes || chosenMinutes,
+      bell: setting("bell", true) !== false,
+      dnd: setting("dnd", true) !== false
     })
     if (root.bar && root.bar.shell && typeof root.bar.shell.summon === "function")
       root.bar.shell.summon("luotao.zen", payload)
@@ -181,6 +183,68 @@ Panel {
           meta: root.summary
           foreground: root.foreground
           fontFamily: root.fontFamily
+        }
+
+        // The week at a glance: seven small bars, today in accent. The point
+        // is the shape of the habit, not precise numbers — those live in the
+        // tooltip and hero line.
+        Column {
+          id: weekView
+          width: parent.width
+          spacing: Style.space(4)
+
+          readonly property var series: Model.weekSeries(root.stats, root.todayKey)
+          readonly property int weekMax: {
+            var max = 0
+            for (var i = 0; i < series.length; i++) max = Math.max(max, series[i].minutes)
+            return max
+          }
+
+          Text {
+            text: "This week · " + Model.weekTotal(weekView.series) + " min"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: weekView.series
+
+              Column {
+                required property var modelData
+                readonly property real share: weekView.weekMax > 0
+                  ? modelData.minutes / weekView.weekMax : 0
+                spacing: Style.space(3)
+
+                Item {
+                  width: Style.space(18)
+                  height: Style.space(34)
+
+                  Rectangle {
+                    anchors.bottom: parent.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Style.space(10)
+                    height: Math.max(Style.space(2), Math.round(parent.height * share))
+                    radius: Style.space(2)
+                    color: modelData.isToday ? Color.accent : root.foreground
+                    opacity: modelData.minutes > 0 ? (modelData.isToday ? 0.9 : 0.45) : 0.15
+                  }
+                }
+
+                Text {
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  text: modelData.label
+                  color: modelData.isToday ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+            }
+          }
         }
 
         Flow {

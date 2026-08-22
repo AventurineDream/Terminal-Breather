@@ -3,8 +3,9 @@
 Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plugin (Omarchy 4 "Quattro" or later). A fullscreen visual pacer — a circle that grows as you breathe in and shrinks as you breathe out — so the eyes lead the breath and the mind has one thing to come back to.
 
 - **Breathing pacer** (fullscreen overlay) — pick a pattern, pick a length, breathe. Phase name and a countdown digit ride along; the desktop is fully hidden for the duration.
-- **Bar widget** — an ensō in the bar: click to choose pattern and length, middle-click to start your usual session immediately. The tooltip carries your daily streak.
+- **Bar widget** — an ensō in the bar: click to choose pattern and length, middle-click to start your usual session immediately. The tooltip carries your daily streak, the panel a seven-day practice view.
 - **Session tracking** — minutes per day in `~/.local/state/omarchy/zen/stats.json`. Ending early still logs the minutes you actually practiced: a streak kept by a short session beats one lost to perfectionism.
+- **Session comforts** — a soft bell at start and end, and do-not-disturb engaged for the duration (borrowed, not owned: your previous DND state is restored afterwards). Both on by default, both optional.
 
 ## Patterns
 
@@ -47,11 +48,27 @@ omarchy-shell luotao.zen status        # {"streakDays":3,"todayMinutes":15,...}
 
 Pattern and length chosen in the panel are written back to `shell.json`, so your last choice is the default next time.
 
+### Settings
+
+```bash
+omarchy bar set luotao.zen bell false   # no bells
+omarchy bar set luotao.zen dnd false    # leave notifications alone
+```
+
+Per-summon overrides work too: `'{"pattern": "box", "minutes": 10, "bell": false, "dnd": false}'`.
+
+## Uninstall
+
+```bash
+omarchy plugin remove luotao.zen
+```
+
+Remove any keybindings you added to `~/.config/hypr/bindings.lua`. Your practice history in `~/.local/state/omarchy/zen/` is left in place; delete it by hand if you want it gone.
+
 ## Roadmap
 
-- Optional bell / soundscape at session boundaries
-- Do-not-disturb during sessions
-- A weekly practice view in the panel
+- Soundscapes (rain, brown noise) during sessions
+- Interval chimes ("mindful bell every 5 minutes")
 
 ## License
 
