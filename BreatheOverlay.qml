@@ -6,10 +6,12 @@ import qs.Commons
 import qs.Ui
 import "ZenModel.js" as Model
 
-// Fullscreen breathing pacer. A circle grows as you breathe in, holds, and
-// shrinks as you breathe out, with the phase name and a countdown digit —
-// visual pacing so the eyes can lead the breath and the mind has one thing
-// to come back to.
+// Fullscreen breathing pacer, on every display at once. A circle grows as
+// you breathe in, holds, and shrinks as you breathe out, with the phase
+// name and a countdown digit — visual pacing so the eyes can lead the breath
+// and the mind has one thing to come back to. One session is owned here
+// (one timer, one endSession); the panels below are just views of it, so
+// the circles stay in sync across screens.
 //
 // Summon with:
 //   omarchy-shell shell summon luotao.zen '{}'
@@ -115,7 +117,6 @@ Item {
     root.opened = true
     root.applyDnd()
     root.ring("bell.oga")
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function takePendingStart() {
@@ -209,15 +210,31 @@ Item {
     }
   }
 
-  PanelWindow {
-    id: panel
-    visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
-    WlrLayershell.namespace: "zen-breathe"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
-    exclusionMode: ExclusionMode.Ignore
+  // One panel per screen. Variants instantiates this component once for
+  // each screen in Quickshell.screens (and again if a screen is plugged in
+  // mid-session); each panel gets its own screen and its own circle size
+  // from its own dimensions, while the breath state stays shared above.
+  // Only the first screen's panel takes keyboard focus — the rest are
+  // visuals — so Esc/Q always lands in exactly one place.
+  Component {
+    id: breathePanel
+    PanelWindow {
+      id: panel
+      required property var modelData
+      required property int index
+      screen: modelData
+      visible: root.opened
+      anchors { top: true; bottom: true; left: true; right: true }
+      color: "transparent"
+      WlrLayershell.namespace: "zen-breathe"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: root.opened && index === 0 ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+      exclusionMode: ExclusionMode.Ignore
+
+      // Focus belongs to the one panel that takes keys: grab it when the
+      // session opens. This replaces the old callLater in startSession,
+      // which could not reach a keyCatcher inside a per-screen panel.
+      onVisibleChanged: if (visible && index === 0) keyCatcher.forceActiveFocus()
 
     readonly property real circleMax: Math.min(width, height) * 0.38
     readonly property real circleMin: circleMax * 0.42
@@ -308,5 +325,11 @@ Item {
         font.pixelSize: Style.font.body
       }
     }
+    }
+  }
+
+  Variants {
+    model: Quickshell.screens
+    delegate: breathePanel
   }
 }
