@@ -2,6 +2,8 @@
 
 Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plugin (Omarchy 4 "Quattro" or later). A fullscreen visual pacer — a circle that grows as you breathe in and shrinks as you breathe out — so the eyes lead the breath and the mind has one thing to come back to.
 
+> Fork of [ya-luotao/omarchy-zen](https://github.com/ya-luotao/omarchy-zen), maintained here as Terminal-Breather.
+
 <p align="center">
   <img src="screenshots/breathe.png" alt="Fullscreen breathing pacer" width="46%" />
   <img src="screenshots/panel.png" alt="Bar panel with weekly practice view" width="26%" />
@@ -20,10 +22,14 @@ Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plu
 | `478` | 4-7-8 | in 4 · hold 7 · out 8 | winding down |
 | `coherent` | Coherent | in 5.5 · out 5.5 | balance, ~5.5 breaths/min |
 
+## Custom patterns
+
+Add your own breathing patterns in `~/.config/omarchy/zen/patterns.json` — copy `patterns.example.json` there and edit it. Each pattern needs a unique `key` (lowercase letters, digits, dashes), a `name`, and at least two `phases`; each phase has a `label`, seconds (`secs`, above 0), and where the circle ends up (`to`: 1 fully inhaled, 0 fully exhaled). A key that collides with a built-in (`box`, `478`, `coherent`) is ignored, and any invalid entry is skipped — a typo in the file never breaks the built-in patterns. The panel lists custom patterns after the built-ins (`1`–`9` picks one), and they work everywhere the built-ins do: panel, keybinding payload, and `omarchy-shell luotao.zen start <key> <minutes>`. The file is re-read whenever the panel opens, so edits apply without restarting the shell.
+
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/ya-luotao/omarchy-zen.git --enable
+omarchy plugin add https://github.com/AventurineDream/Terminal-Breather.git --enable
 ```
 
 ## Keybinding
@@ -39,7 +45,7 @@ Omit the payload keys to use the defaults (`{}` works too).
 
 ## Usage
 
-- Left-click the ensō → panel: pattern, length, **Begin** (`1`–`3` picks a pattern, `Enter` begins)
+- Left-click the ensō → panel: pattern, length, **Begin** (`1`–`9` picks a pattern, `Enter` begins)
 - Middle-click the ensō → start immediately with your saved defaults
 - During a session: `Esc` ends early (practice up to that point still counts)
 - Session complete → a notification with your updated streak

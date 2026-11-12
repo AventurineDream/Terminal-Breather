@@ -41,8 +41,77 @@ var PATTERNS = {
 
 var PATTERN_ORDER = ["box", "478", "coherent"]
 
-function pattern(key) {
-  return PATTERNS[String(key || "").toLowerCase()] || PATTERNS.box
+function pattern(key, map) {
+  var m = map || PATTERNS
+  return m[String(key || "").toLowerCase()] || m.box || PATTERNS.box
+}
+
+// ---- Custom patterns. A JSON config file (default
+// ~/.config/omarchy/zen/patterns.json) may add patterns:
+//   {"patterns": [{"key": "slow-6", "name": "Slow 6", "hint": "in 6 · out 6",
+//                  "phases": [{"label": "Breathe in", "secs": 6, "to": 1},
+//                             {"label": "Breathe out", "secs": 6, "to": 0}]}]}
+// Keys are lowercase letters, digits and dashes. A custom key that collides
+// with a built-in (box, 478, coherent) is ignored — built-ins win. Invalid
+// entries are skipped, never fatal: a typo in the config must not break the
+// three patterns that already work.
+
+function isValidPhase(ph) {
+  return ph && typeof ph.label === "string" && ph.label.length > 0 &&
+    typeof ph.secs === "number" && isFinite(ph.secs) && ph.secs > 0 &&
+    (ph.to === 0 || ph.to === 1)
+}
+
+function parseCustomPatterns(raw) {
+  var out = []
+  var seen = {}
+  try {
+    var parsed = JSON.parse(raw || "{}")
+    var list = parsed && parsed.patterns
+    if (!Array.isArray(list)) return out
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i]
+      if (!p || typeof p.key !== "string") continue
+      var key = p.key.toLowerCase()
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(key)) continue
+      if (seen[key]) continue
+      seen[key] = true
+      if (PATTERNS[key]) continue
+      if (typeof p.name !== "string" || p.name.length === 0) continue
+      if (!Array.isArray(p.phases) || p.phases.length < 2) continue
+      var phases = []
+      var ok = true
+      for (var j = 0; j < p.phases.length; j++) {
+        var ph = p.phases[j]
+        if (!isValidPhase(ph)) { ok = false; break }
+        phases.push({ label: ph.label, secs: ph.secs, to: ph.to })
+      }
+      if (!ok) continue
+      out.push({ key: key, name: p.name,
+        hint: typeof p.hint === "string" ? p.hint : "",
+        phases: phases })
+    }
+  } catch (e) {}
+  return out
+}
+
+// Merged pattern map + order: built-ins first, customs after, in file order.
+// Pure: recomputed from scratch every call, so reloading the config file
+// never duplicates a pattern or keeps one that was removed.
+function resolvePatterns(customRaw) {
+  var map = {}
+  var order = []
+  for (var i = 0; i < PATTERN_ORDER.length; i++) {
+    var k = PATTERN_ORDER[i]
+    map[k] = PATTERNS[k]
+    order.push(k)
+  }
+  var customs = parseCustomPatterns(customRaw)
+  for (var j = 0; j < customs.length; j++) {
+    map[customs[j].key] = customs[j]
+    order.push(customs[j].key)
+  }
+  return { map: map, order: order, customs: customs }
 }
 
 function cycleSeconds(pat) {
