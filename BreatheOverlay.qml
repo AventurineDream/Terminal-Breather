@@ -14,7 +14,8 @@ import "ZenModel.js" as Model
 // Summon with:
 //   omarchy-shell shell summon luotao.zen '{}'
 //   omarchy-shell shell summon luotao.zen '{"pattern": "478", "minutes": 5}'
-// Patterns: "box" (4-4-4-4), "478" (4-7-8), "coherent" (5.5 / 5.5).
+// Patterns: "box" (4-4-4-4), "478" (4-7-8), "coherent" (5.5 / 5.5),
+// plus custom patterns from ~/.config/omarchy/zen/patterns.json.
 //
 // Esc ends the session early; practice up to that point still counts.
 Item {
@@ -27,6 +28,7 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
+  readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
 
   property bool opened: false
   property string fontFamily: Style.font.menuFamily
@@ -36,6 +38,14 @@ Item {
   property int totalSecs: 600
   property double nowMs: Date.now()
   property var stats: Model.parseStats("")
+  property var resolvedPatterns: Model.resolvePatterns("")
+
+  // A summon naming a custom pattern must resolve against the freshly read
+  // config file, not the map from component load — a keybinding fired right
+  // after the file is created would otherwise fall back to box. open()
+  // stashes the payload and the session starts once the file read
+  // completes (or fails, in which case the built-ins stand).
+  property var pendingStart: null
 
   // Session comforts, set per-summon via payload ("bell": false, "dnd":
   // false to opt out). DND is borrowed, not owned: it engages only if it
@@ -82,9 +92,15 @@ Item {
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
+    root.pendingStart = payload
+    statsFile.reload()
+    patternsFile.reload()
+  }
+
+  function startSession(payload) {
     if (payload.fontFamily) root.fontFamily = payload.fontFamily
 
-    root.pattern = Model.pattern(payload.pattern)
+    root.pattern = Model.pattern(payload.pattern, root.resolvedPatterns.map)
     var minutes = Number(payload.minutes)
     if (!isFinite(minutes) || minutes <= 0) minutes = 10
     root.totalSecs = Math.max(10, Math.round(minutes * 60))
@@ -94,18 +110,25 @@ Item {
     root.nowMs = Date.now()
     root.startedAt = root.nowMs
     root.opened = true
-    statsFile.reload()
     root.applyDnd()
     root.ring("bell.oga")
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
+  function takePendingStart() {
+    var p = root.pendingStart
+    root.pendingStart = null
+    return p
+  }
+
   function close() {
+    root.pendingStart = null
     root.opened = false
     root.restoreDnd()
   }
 
   function dismiss() {
+    root.pendingStart = null
     root.opened = false
     root.restoreDnd()
     if (root.shell && typeof root.shell.hide === "function")
@@ -151,6 +174,24 @@ Item {
     onLoaded: root.stats = Model.parseStats(text())
     onFileChanged: reload()
     onLoadFailed: root.stats = Model.parseStats("")
+  }
+
+  FileView {
+    id: patternsFile
+    path: root.patternsPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: {
+      root.resolvedPatterns = Model.resolvePatterns(text())
+      var p = root.takePendingStart()
+      if (p) root.startSession(p)
+    }
+    onFileChanged: reload()
+    onLoadFailed: {
+      root.resolvedPatterns = Model.resolvePatterns("")
+      var p = root.takePendingStart()
+      if (p) root.startSession(p)
+    }
   }
 
   Timer {

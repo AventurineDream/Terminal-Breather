@@ -16,6 +16,7 @@ Panel {
 
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
+  readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -28,7 +29,9 @@ Panel {
   property string chosenPattern: String(setting("pattern", "box"))
   property int chosenMinutes: Number(setting("minutes", 10))
 
-  readonly property var patternKeys: Model.PATTERN_ORDER
+  property var resolvedPatterns: Model.resolvePatterns("")
+
+  readonly property var patternKeys: resolvedPatterns.order
   readonly property var minuteChoices: [5, 10, 15, 20]
 
   function choose(patternKey, minutes) {
@@ -62,7 +65,7 @@ Panel {
   // A watch established while the file doesn't exist yet never fires, so
   // reload whenever the panel opens — the streak is fresh every time it is
   // actually looked at.
-  onOpenedChanged: if (opened) statsFile.reload()
+  onOpenedChanged: if (opened) { statsFile.reload(); patternsFile.reload() }
 
   FileView {
     id: statsFile
@@ -72,6 +75,16 @@ Panel {
     onLoaded: root.stats = Model.parseStats(text())
     onFileChanged: reload()
     onLoadFailed: root.stats = Model.parseStats("")
+  }
+
+  FileView {
+    id: patternsFile
+    path: root.patternsPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.resolvedPatterns = Model.resolvePatterns(text())
+    onFileChanged: reload()
+    onLoadFailed: root.resolvedPatterns = Model.resolvePatterns("")
   }
 
   IpcHandler {
@@ -167,7 +180,11 @@ Panel {
       onReturnRequested: root.startSession(root.chosenPattern, root.chosenMinutes)
       onTextKey: function(text) {
         var k = String(text || "").toLowerCase()
-        var idx = root.patternKeys.indexOf(k === "1" ? "box" : k === "2" ? "478" : k === "3" ? "coherent" : "")
+        var idx = -1
+        if (/^[1-9]$/.test(k)) {
+          var n = parseInt(k, 10) - 1
+          if (n < root.patternKeys.length) idx = n
+        }
         if (idx !== -1) root.choose(root.patternKeys[idx], root.chosenMinutes)
         else if (k === "s" || k === " ") root.startSession(root.chosenPattern, root.chosenMinutes)
       }
@@ -256,7 +273,7 @@ Panel {
 
             Button {
               required property string modelData
-              readonly property var pat: Model.pattern(modelData)
+              readonly property var pat: Model.pattern(modelData, root.resolvedPatterns.map)
               text: pat.name
               tooltipText: pat.hint
               bordered: true
@@ -297,7 +314,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "1-3 pattern · Enter begin · Esc close"
+          text: "1-" + Math.min(root.patternKeys.length, 9) + " pattern · Enter begin · Esc close"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
