@@ -83,6 +83,16 @@ Remove any keybindings you added to `~/.config/hypr/bindings.lua`. Your practice
 - Soundscapes (rain, brown noise) during sessions
 - Interval chimes ("mindful bell every 5 minutes")
 
+## Development
+
+The pure model (`ZenModel.js`) is covered by a node harness — no shell needed:
+
+```bash
+node test/ZenModel.test.js
+```
+
+The QML layer (FileView timing, panel wiring) is reviewed by diff and verified on a live Omarchy shell.
+
 ## License
 
 MIT
