@@ -236,95 +236,95 @@ Item {
       // which could not reach a keyCatcher inside a per-screen panel.
       onVisibleChanged: if (visible && index === 0) keyCatcher.forceActiveFocus()
 
-    readonly property real circleMax: Math.min(width, height) * 0.38
-    readonly property real circleMin: circleMax * 0.42
-    readonly property real circleSize: circleMin + (circleMax - circleMin) * root.breath.fullness
+      readonly property real circleMax: Math.min(width, height) * 0.38
+      readonly property real circleMin: circleMax * 0.42
+      readonly property real circleSize: circleMin + (circleMax - circleMin) * root.breath.fullness
 
-    Rectangle {
-      anchors.fill: parent
-      color: Color.menu.scrim
-    }
-
-    // The desktop fully gone: a breathing pacer over readable terminals is
-    // just another notification fighting for attention.
-    Rectangle {
-      anchors.fill: parent
-      color: Color.menu.background
-    }
-
-    Item {
-      id: keyCatcher
-      anchors.fill: parent
-      focus: true
-
-      Keys.priority: Keys.BeforeItem
-      Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
-          root.endSession(false)
-          event.accepted = true
-        }
+      Rectangle {
+        anchors.fill: parent
+        color: Color.menu.scrim
       }
-    }
 
-    // Fixed-size stage for the breathing circle so the labels below never
-    // move as it grows and shrinks — a bobbing layout would defeat the calm.
-    Column {
-      anchors.centerIn: parent
-      spacing: Style.space(28)
+      // The desktop fully gone: a breathing pacer over readable terminals is
+      // just another notification fighting for attention.
+      Rectangle {
+        anchors.fill: parent
+        color: Color.menu.background
+      }
 
       Item {
-        width: panel.circleMax
-        height: panel.circleMax
-        anchors.horizontalCenter: parent.horizontalCenter
+        id: keyCatcher
+        anchors.fill: parent
+        focus: true
 
-        // Halo: a faint outer ring at full inhale size, the target the
-        // breath is growing toward.
-        Rectangle {
-          anchors.centerIn: parent
-          width: panel.circleMax
-          height: panel.circleMax
-          radius: width / 2
-          color: "transparent"
-          border.color: root.dim
-          border.width: 1
-          opacity: 0.35
-        }
-
-        Rectangle {
-          anchors.centerIn: parent
-          width: panel.circleSize
-          height: panel.circleSize
-          radius: width / 2
-          color: Qt.alpha(Color.accent, 0.25)
-          border.color: Color.accent
-          border.width: 2
-
-          Text {
-            anchors.centerIn: parent
-            text: root.breath.secsLeft
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Math.round(panel.circleMin * 0.32)
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
+            root.endSession(false)
+            event.accepted = true
           }
         }
       }
 
-      Text {
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: root.breath.label
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.title
-      }
+      // Fixed-size stage for the breathing circle so the labels below never
+      // move as it grows and shrinks — a bobbing layout would defeat the calm.
+      Column {
+        anchors.centerIn: parent
+        spacing: Style.space(28)
 
-      Text {
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: root.pattern.name + " · " + Model.formatRemaining(root.remainingSecs) + " left · Esc to end"
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
+        Item {
+          width: panel.circleMax
+          height: panel.circleMax
+          anchors.horizontalCenter: parent.horizontalCenter
+
+          // Halo: a faint outer ring at full inhale size, the target the
+          // breath is growing toward.
+          Rectangle {
+            anchors.centerIn: parent
+            width: panel.circleMax
+            height: panel.circleMax
+            radius: width / 2
+            color: "transparent"
+            border.color: root.dim
+            border.width: 1
+            opacity: 0.35
+          }
+
+          Rectangle {
+            anchors.centerIn: parent
+            width: panel.circleSize
+            height: panel.circleSize
+            radius: width / 2
+            color: Qt.alpha(Color.accent, 0.25)
+            border.color: Color.accent
+            border.width: 2
+
+            Text {
+              anchors.centerIn: parent
+              text: root.breath.secsLeft
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Math.round(panel.circleMin * 0.32)
+            }
+          }
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.breath.label
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.pattern.name + " · " + Model.formatRemaining(root.remainingSecs) + " left · Esc to end"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
       }
-    }
     }
   }
 
