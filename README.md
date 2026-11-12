@@ -62,6 +62,7 @@ Omit the payload keys to use the defaults (`{}` works too).
 - Middle-click the ensō → start immediately with your saved defaults
 - During a session: `Esc` ends early (practice up to that point still counts)
 - Session complete → a notification with your updated streak
+- The session shows on every display at once, circles in sync — Esc works from whichever screen you are looking at (keyboard focus sits on the first screen's panel)
 
 From scripts:
 
