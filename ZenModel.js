@@ -288,6 +288,44 @@ function persistStatsCommand(path, stats) {
   ]
 }
 
+// ---- Obsidian meditation log. One row per session, appended to a Markdown
+// table when a session ends:
+//   | Date | Pattern | Minutes | Completed |
+//   | 2026-11-11 | Breath of Fire | 5 | yes |
+// The default location is the vault's meditation log; it can be overridden
+// in the plugin settings (meditationLogPath). A missing file is created
+// with the table header first, so a moved vault still gets a readable log.
+// A missing folder is left alone — the append then fails silently rather
+// than scattering a log somewhere the vault is not.
+
+var MEDITATION_LOG_HEADER = "# Meditation Log\n\nSessions logged by Terminal-Breather (fork of luotao.zen) — one row per session, appended automatically when a session ends.\n\n| Date | Pattern | Minutes | Completed |\n| --- | --- | --- | --- |"
+
+function meditationLogPath(home) {
+  return (home || "") + "/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
+}
+
+// One table row. Pattern names come from the config file, so pipes and
+// newlines are scrubbed — a name must never break the table or the line.
+function logRow(dateKey, patternName, minutes, completed) {
+  var name = String(patternName || "").replace(/[|\r\n]/g, " ").replace(/\s+/g, " ").trim()
+  if (!name) name = "Unknown"
+  return "| " + dateKey + " | " + name + " | " + Math.floor(Number(minutes) || 0) +
+    " | " + (completed ? "yes" : "no") + " |"
+}
+
+// Argv for appending one row to the meditation log. The row, the path and
+// the header travel as positional args so they are data to the shell, never
+// syntax — a pattern name with shell metacharacters cannot escape the append.
+// No mkdir -p here, unlike persistStatsCommand: if the vault folder is gone,
+// the row is skipped rather than a log created somewhere the vault is not.
+function appendLogCommand(logPath, row) {
+  return [
+    "sh", "-c",
+    'if [ ! -f "$1" ]; then printf \'%s\\n\' "$3" > "$1" || exit 0; fi; printf \'%s\\n\' "$2" >> "$1"',
+    "sh", logPath, row, MEDITATION_LOG_HEADER
+  ]
+}
+
 function formatRemaining(totalSecs) {
   var s = Math.max(0, Math.round(totalSecs))
   var m = Math.floor(s / 60)

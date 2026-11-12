@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "luotao.zen",
   "name": "Zen",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "Luo Tao <luotao@hey.com>",
   "license": "MIT",
-  "description": "Guided-breathing meditation for the Omarchy shell: a fullscreen visual breathing pacer with built-in and custom patterns, session tracking and a daily streak in the bar.",
+  "description": "Guided-breathing meditation for the Omarchy shell: a fullscreen visual breathing pacer with built-in and custom patterns, session tracking and a daily streak in the bar, and a per-session row in an Obsidian meditation log.",
   "kinds": [
     "bar-widget",
     "overlay"
@@ -63,6 +63,12 @@
         "max": 120,
         "step": 1,
         "defaultValue": 10
+      },
+      {
+        "key": "meditationLogPath",
+        "type": "string",
+        "label": "Obsidian meditation log file (empty = vault default)",
+        "defaultValue": ""
       }
     ]
   }

@@ -29,6 +29,8 @@ Item {
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
   readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
+  readonly property string defaultLogPath: Model.meditationLogPath(Quickshell.env("HOME"))
+  property string logPath: defaultLogPath
 
   property bool opened: false
   property string fontFamily: Style.font.menuFamily
@@ -106,6 +108,7 @@ Item {
     root.totalSecs = Math.max(10, Math.round(minutes * 60))
     root.bellWanted = payload.bell !== false
     root.dndWanted = payload.dnd !== false
+    root.logPath = payload.logPath || root.defaultLogPath
 
     root.nowMs = Date.now()
     root.startedAt = root.nowMs
@@ -141,7 +144,8 @@ Item {
   }
 
   // Ending early still logs the minutes actually practiced — a streak kept
-  // by a short session beats one lost to perfectionism.
+  // by a short session beats one lost to perfectionism. The same minutes
+  // land in the Obsidian meditation log, one row per session.
   function endSession(completed) {
     // DND back to the user's state before the completion notification, or
     // the bell we just rang announces a notification nobody sees.
@@ -152,6 +156,7 @@ Item {
       var today = Qt.formatDateTime(new Date(), "yyyy-MM-dd")
       root.stats = Model.addMinutes(root.stats, today, minutes)
       Quickshell.execDetached(Model.persistStatsCommand(root.statsPath, root.stats))
+      Quickshell.execDetached(Model.appendLogCommand(root.logPath, Model.logRow(today, root.pattern.name, minutes, completed)))
     }
     if (completed) {
       root.ring("complete.oga")

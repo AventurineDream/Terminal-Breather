@@ -5,12 +5,14 @@
 // reviewed by diff and verified on dooracle instead.
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
+const { execFileSync } = require("child_process");
 const src = fs
   .readFileSync(path.join(__dirname, "..", "ZenModel.js"), "utf8")
   .replace(/^\.pragma library\n/, "");
 const factory = new Function(
   src +
-    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, parseStats, addMinutes, streakDays, weekSeries, formatRemaining };"
+    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, logRow, appendLogCommand };"
 );
 const M = factory();
 
@@ -163,5 +165,88 @@ check(
   M.streakDays({ days: { "2026-11-10": 5, "2026-11-11": 16 } }, "2026-11-11") === 2
 );
 check("formatRemaining", M.formatRemaining(65) === "1:05");
+
+// --- Meditation log ---
+check(
+  "log path default",
+  M.meditationLogPath("/home/aven") ===
+    "/home/aven/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
+);
+check(
+  "logRow completed",
+  M.logRow("2026-11-11", "Breath of Fire", 5, true) ===
+    "| 2026-11-11 | Breath of Fire | 5 | yes |"
+);
+check(
+  "logRow early end",
+  M.logRow("2026-11-11", "Box breathing", 2, false) ===
+    "| 2026-11-11 | Box breathing | 2 | no |"
+);
+check(
+  "logRow scrubs pipe and newline",
+  M.logRow("2026-11-11", "We|ird\nName", 3, true) ===
+    "| 2026-11-11 | We ird Name | 3 | yes |"
+);
+check(
+  "logRow empty name",
+  M.logRow("2026-11-11", "", 1, true) ===
+    "| 2026-11-11 | Unknown | 1 | yes |"
+);
+const logCmd = M.appendLogCommand(
+  "/home/aven/log.md",
+  "| 2026-11-11 | Box breathing | 5 | yes |"
+);
+check("appendLogCommand argv", logCmd[0] === "sh" && logCmd[1] === "-c" && logCmd[3] === "sh");
+check("appendLogCommand path arg", logCmd[4] === "/home/aven/log.md");
+check(
+  "appendLogCommand row arg",
+  logCmd[5] === "| 2026-11-11 | Box breathing | 5 | yes |"
+);
+check("appendLogCommand header arg", logCmd[6] === M.MEDITATION_LOG_HEADER);
+check(
+  "appendLogCommand values are args, not syntax",
+  !logCmd[2].includes("/home/aven/log.md") && !logCmd[2].includes("Box breathing")
+);
+check(
+  "appendLogCommand uses positional refs",
+  logCmd[2].includes('"$1"') && logCmd[2].includes('"$2"') && logCmd[2].includes('"$3"')
+);
+// Run the real command: missing file gets header + row; existing file gets
+// the row appended without a second header; a missing folder fails silently.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "zen-log-"));
+const logFile = path.join(tmp, "Meditation Log.md");
+execFileSync(logCmd[0], logCmd.slice(1).map((a, i) => (i === 3 ? logFile : a)), {
+  stdio: "ignore",
+});
+let logged = fs.readFileSync(logFile, "utf8");
+check(
+  "missing log file created with header + row",
+  logged ===
+    M.MEDITATION_LOG_HEADER + "\n| 2026-11-11 | Box breathing | 5 | yes |\n"
+);
+const row2 = M.logRow("2026-11-12", "Slow 6", 10, true);
+const logCmd2 = M.appendLogCommand(logFile, row2);
+execFileSync(logCmd2[0], logCmd2.slice(1), { stdio: "ignore" });
+logged = fs.readFileSync(logFile, "utf8");
+check(
+  "second row appended, header not duplicated",
+  logged ===
+    M.MEDITATION_LOG_HEADER +
+      "\n| 2026-11-11 | Box breathing | 5 | yes |\n| 2026-11-12 | Slow 6 | 10 | yes |\n"
+);
+const missingDirCmd = M.appendLogCommand(
+  path.join(tmp, "no-such-dir", "log.md"),
+  "| 2026-11-11 | Box breathing | 1 | yes |"
+);
+let missingThrew = false;
+try {
+  execFileSync(missingDirCmd[0], missingDirCmd.slice(1), { stdio: "ignore" });
+} catch (e) {
+  missingThrew = true;
+}
+check(
+  "missing folder fails silently, nothing created",
+  !missingThrew && !fs.existsSync(path.join(tmp, "no-such-dir"))
+);
 
 console.log(`ZenModel tests: ${pass} passed${process.exitCode ? " (WITH FAILURES)" : ""}`);
