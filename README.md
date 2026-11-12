@@ -28,6 +28,17 @@ Add your own breathing patterns in `~/.config/omarchy/zen/patterns.json` — cop
 
 A pattern may also carry a `ramp` — `"ramp": {"from": 2, "to": 0.5, "overSecs": 60}` scales every phase from twice as slow to twice as fast over the first minute of the session, so it starts slow and builds speed. Breath of Fire in the example file uses this: short in/out phases, ramping from 30 breaths a minute to 120 over the first minute. An invalid ramp is dropped and the pattern kept.
 
+## Meditation log
+
+Every session that reaches at least one minute gets one row in an Obsidian meditation log, appended when the session ends — completed or ended early, the minutes actually practiced are what lands:
+
+```markdown
+| Date | Pattern | Minutes | Completed |
+| 2026-11-11 | Breath of Fire | 5 | yes |
+```
+
+By default the log is `~/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md`. Change it in the plugin settings (`meditationLogPath`); leave it empty for the default. If the file is missing it is created with the table header first. If the folder is missing the row is skipped silently — the stats still log, and nothing is written somewhere the vault is not. Sessions under a minute are not logged, same as the stats.
+
 ## Install
 
 ```bash
@@ -66,6 +77,7 @@ Pattern and length chosen in the panel are written back to `shell.json`, so your
 ```bash
 omarchy bar set luotao.zen bell false   # no bells
 omarchy bar set luotao.zen dnd false    # leave notifications alone
+omarchy bar set luotao.zen meditationLogPath "/home/aven/notes/meditation.md"  # log somewhere else (empty = vault default)
 ```
 
 Per-summon overrides work too: `'{"pattern": "box", "minutes": 10, "bell": false, "dnd": false}'`.
