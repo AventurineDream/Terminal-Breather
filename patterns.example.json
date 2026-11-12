@@ -38,6 +38,28 @@
           "to": 0
         }
       ]
+    },
+    {
+      "hint": "rapid in-out — starts slow, builds speed",
+      "key": "breath-of-fire",
+      "name": "Breath of Fire",
+      "phases": [
+        {
+          "label": "In",
+          "secs": 0.5,
+          "to": 1
+        },
+        {
+          "label": "Out",
+          "secs": 0.5,
+          "to": 0
+        }
+      ],
+      "ramp": {
+        "from": 2,
+        "to": 0.5,
+        "overSecs": 60
+      }
     }
   ]
 }

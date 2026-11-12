@@ -26,6 +26,8 @@ Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plu
 
 Add your own breathing patterns in `~/.config/omarchy/zen/patterns.json` — copy `patterns.example.json` there and edit it. Each pattern needs a unique `key` (lowercase letters, digits, dashes), a `name`, and at least two `phases`; each phase has a `label`, seconds (`secs`, above 0), and where the circle ends up (`to`: 1 fully inhaled, 0 fully exhaled). A key that collides with a built-in (`box`, `478`, `coherent`) is ignored, and any invalid entry is skipped — a typo in the file never breaks the built-in patterns. The panel lists custom patterns after the built-ins (`1`–`9` picks one), and they work everywhere the built-ins do: panel, keybinding payload, and `omarchy-shell luotao.zen start <key> <minutes>`. The file is re-read whenever the panel opens, so edits apply without restarting the shell.
 
+A pattern may also carry a `ramp` — `"ramp": {"from": 2, "to": 0.5, "overSecs": 60}` scales every phase from twice as slow to twice as fast over the first minute of the session, so it starts slow and builds speed. Breath of Fire in the example file uses this: short in/out phases, ramping from 30 breaths a minute to 120 over the first minute. An invalid ramp is dropped and the pattern kept.
+
 ## Install
 
 ```bash
