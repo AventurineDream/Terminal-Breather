@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "luotao.zen",
   "name": "Zen",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Luo Tao <luotao@hey.com>",
   "license": "MIT",
-  "description": "Guided-breathing meditation for the Omarchy shell: a fullscreen visual breathing pacer (box, 4-7-8, coherent) with session tracking and a daily streak in the bar.",
+  "description": "Guided-breathing meditation for the Omarchy shell: a fullscreen visual breathing pacer with built-in and custom patterns, session tracking and a daily streak in the bar.",
   "kinds": [
     "bar-widget",
     "overlay"

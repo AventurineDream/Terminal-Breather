@@ -41,8 +41,121 @@ var PATTERNS = {
 
 var PATTERN_ORDER = ["box", "478", "coherent"]
 
-function pattern(key) {
-  return PATTERNS[String(key || "").toLowerCase()] || PATTERNS.box
+function pattern(key, map) {
+  var m = map || PATTERNS
+  return m[String(key || "").toLowerCase()] || m.box || PATTERNS.box
+}
+
+// ---- Custom patterns. A JSON config file (default
+// ~/.config/omarchy/zen/patterns.json) may add patterns:
+//   {"patterns": [{"key": "slow-6", "name": "Slow 6", "hint": "in 6 · out 6",
+//                  "phases": [{"label": "Breathe in", "secs": 6, "to": 1},
+//                             {"label": "Breathe out", "secs": 6, "to": 0}]}]}
+// Keys are lowercase letters, digits and dashes. A custom key that collides
+// with a built-in (box, 478, coherent) is ignored — built-ins win. Invalid
+// entries are skipped, never fatal: a typo in the config must not break the
+// three patterns that already work. A pattern may also carry an optional
+// ramp (see below) that scales its phases over the first minute of a
+// session; an invalid ramp is dropped and the pattern kept.
+
+function isValidPhase(ph) {
+  return ph && typeof ph.label === "string" && ph.label.length > 0 &&
+    typeof ph.secs === "number" && isFinite(ph.secs) && ph.secs > 0 &&
+    (ph.to === 0 || ph.to === 1)
+}
+
+function parseCustomPatterns(raw) {
+  var out = []
+  var seen = {}
+  try {
+    var parsed = JSON.parse(raw || "{}")
+    var list = parsed && parsed.patterns
+    if (!Array.isArray(list)) return out
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i]
+      if (!p || typeof p.key !== "string") continue
+      var key = p.key.toLowerCase()
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(key)) continue
+      if (seen[key]) continue
+      seen[key] = true
+      if (PATTERNS[key]) continue
+      if (typeof p.name !== "string" || p.name.length === 0) continue
+      if (!Array.isArray(p.phases) || p.phases.length < 2) continue
+      var phases = []
+      var ok = true
+      for (var j = 0; j < p.phases.length; j++) {
+        var ph = p.phases[j]
+        if (!isValidPhase(ph)) { ok = false; break }
+        phases.push({ label: ph.label, secs: ph.secs, to: ph.to })
+      }
+      if (!ok) continue
+      var entry = { key: key, name: p.name,
+        hint: typeof p.hint === "string" ? p.hint : "",
+        phases: phases }
+      if (p.ramp && validRamp(p.ramp)) {
+        entry.ramp = { from: p.ramp.from, to: p.ramp.to, overSecs: p.ramp.overSecs }
+      }
+      out.push(entry)
+    }
+  } catch (e) {}
+  return out
+}
+
+// Merged pattern map + order: built-ins first, customs after, in file order.
+// Pure: recomputed from scratch every call, so reloading the config file
+// never duplicates a pattern or keeps one that was removed.
+function resolvePatterns(customRaw) {
+  var map = {}
+  var order = []
+  for (var i = 0; i < PATTERN_ORDER.length; i++) {
+    var k = PATTERN_ORDER[i]
+    map[k] = PATTERNS[k]
+    order.push(k)
+  }
+  var customs = parseCustomPatterns(customRaw)
+  for (var j = 0; j < customs.length; j++) {
+    map[customs[j].key] = customs[j]
+    order.push(customs[j].key)
+  }
+  return { map: map, order: order, customs: customs }
+}
+
+// ---- Tempo ramp. A pattern may carry an optional ramp that scales every
+// phase duration over the first `overSecs` of a session:
+//   "ramp": {"from": 2, "to": 0.5, "overSecs": 60}
+// A scale of 2 means twice as slow as the written phases, 0.5 twice as
+// fast. The scale moves linearly from `from` to `to`, so a session starts
+// slow and builds speed — breath of fire is the canonical example: short
+// in/out phases with a ramp from slow to fast.
+
+function validRamp(r) {
+  return r && typeof r.from === "number" && isFinite(r.from) && r.from > 0 &&
+    typeof r.to === "number" && isFinite(r.to) && r.to > 0 &&
+    typeof r.overSecs === "number" && isFinite(r.overSecs) && r.overSecs > 0
+}
+
+// Current tempo scale at `t` seconds into the session: 1 with no ramp.
+function rampScale(pat, t) {
+  if (!pat || !validRamp(pat.ramp)) return 1
+  var r = pat.ramp
+  var f = Math.min(Math.max(t / r.overSecs, 0), 1)
+  return r.from + (r.to - r.from) * f
+}
+
+// Written-pattern seconds reached after `t` real seconds, integrating
+// 1/scale over the session. Closed form for a linear ramp: the log term is
+// the integral of 1/(a + b·u).
+function rampBaseTime(pat, t) {
+  if (!pat || !validRamp(pat.ramp)) return Math.max(t, 0)
+  var r = pat.ramp
+  t = Math.max(t, 0)
+  if (r.to === r.from) return t / r.from
+  var done = (r.overSecs / (r.to - r.from)) * Math.log(r.to / r.from)
+  if (t <= r.overSecs) {
+    return (r.overSecs / (r.to - r.from)) *
+      Math.log((r.from + (r.to - r.from) * t / r.overSecs) / r.from)
+  }
+  return done + (t - r.overSecs) / r.to
 }
 
 function cycleSeconds(pat) {
@@ -56,7 +169,8 @@ function cycleSeconds(pat) {
 // [0, 1], eased with a half-cosine so movement starts and ends softly —
 // linear motion reads as mechanical, breath is not.
 function breathAt(pat, t) {
-  var into = t % cycleSeconds(pat)
+  var into = rampBaseTime(pat, t) % cycleSeconds(pat)
+  var scale = rampScale(pat, t)
   var from = pat.phases[pat.phases.length - 1].to
   for (var i = 0; i < pat.phases.length; i++) {
     var ph = pat.phases[i]
@@ -65,14 +179,14 @@ function breathAt(pat, t) {
       var eased = 0.5 - 0.5 * Math.cos(Math.PI * x)
       return {
         label: ph.label,
-        secsLeft: Math.ceil(ph.secs - into),
+        secsLeft: Math.ceil((ph.secs - into) * scale),
         fullness: from + (ph.to - from) * eased
       }
     }
     into -= ph.secs
     from = ph.to
   }
-  return { label: pat.phases[0].label, secsLeft: pat.phases[0].secs, fullness: from }
+  return { label: pat.phases[0].label, secsLeft: Math.ceil(pat.phases[0].secs * scale), fullness: from }
 }
 
 // ---- Session stats. Stored as {"days": {"2026-08-22": 10, ...}} minutes.

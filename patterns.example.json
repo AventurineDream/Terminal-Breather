@@ -1,0 +1,65 @@
+{
+  "patterns": [
+    {
+      "hint": "in 6 · out 6 — unwind",
+      "key": "slow-6",
+      "name": "Slow 6",
+      "phases": [
+        {
+          "label": "Breathe in",
+          "secs": 6,
+          "to": 1
+        },
+        {
+          "label": "Breathe out",
+          "secs": 6,
+          "to": 0
+        }
+      ]
+    },
+    {
+      "hint": "in 4 · hold 6 · out 6",
+      "key": "calm-466",
+      "name": "Calm 4-6-6",
+      "phases": [
+        {
+          "label": "Breathe in",
+          "secs": 4,
+          "to": 1
+        },
+        {
+          "label": "Hold",
+          "secs": 6,
+          "to": 1
+        },
+        {
+          "label": "Breathe out",
+          "secs": 6,
+          "to": 0
+        }
+      ]
+    },
+    {
+      "hint": "rapid in-out — starts slow, builds speed",
+      "key": "breath-of-fire",
+      "name": "Breath of Fire",
+      "phases": [
+        {
+          "label": "In",
+          "secs": 0.5,
+          "to": 1
+        },
+        {
+          "label": "Out",
+          "secs": 0.5,
+          "to": 0
+        }
+      ],
+      "ramp": {
+        "from": 2,
+        "to": 0.5,
+        "overSecs": 60
+      }
+    }
+  ]
+}
