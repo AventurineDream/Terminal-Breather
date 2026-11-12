@@ -27,6 +27,7 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
+  readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
 
   property bool opened: false
   property string fontFamily: Style.font.menuFamily
@@ -36,6 +37,7 @@ Item {
   property int totalSecs: 600
   property double nowMs: Date.now()
   property var stats: Model.parseStats("")
+  property var resolvedPatterns: Model.resolvePatterns("")
 
   // Session comforts, set per-summon via payload ("bell": false, "dnd":
   // false to opt out). DND is borrowed, not owned: it engages only if it
@@ -84,7 +86,7 @@ Item {
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     if (payload.fontFamily) root.fontFamily = payload.fontFamily
 
-    root.pattern = Model.pattern(payload.pattern)
+    root.pattern = Model.pattern(payload.pattern, root.resolvedPatterns.map)
     var minutes = Number(payload.minutes)
     if (!isFinite(minutes) || minutes <= 0) minutes = 10
     root.totalSecs = Math.max(10, Math.round(minutes * 60))
@@ -95,6 +97,7 @@ Item {
     root.startedAt = root.nowMs
     root.opened = true
     statsFile.reload()
+    patternsFile.reload()
     root.applyDnd()
     root.ring("bell.oga")
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -151,6 +154,16 @@ Item {
     onLoaded: root.stats = Model.parseStats(text())
     onFileChanged: reload()
     onLoadFailed: root.stats = Model.parseStats("")
+  }
+
+  FileView {
+    id: patternsFile
+    path: root.patternsPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.resolvedPatterns = Model.resolvePatterns(text())
+    onFileChanged: reload()
+    onLoadFailed: root.resolvedPatterns = Model.resolvePatterns("")
   }
 
   Timer {
