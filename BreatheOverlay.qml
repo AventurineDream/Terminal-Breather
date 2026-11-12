@@ -6,10 +6,12 @@ import qs.Commons
 import qs.Ui
 import "ZenModel.js" as Model
 
-// Fullscreen breathing pacer. A circle grows as you breathe in, holds, and
-// shrinks as you breathe out, with the phase name and a countdown digit —
-// visual pacing so the eyes can lead the breath and the mind has one thing
-// to come back to.
+// Fullscreen breathing pacer, on every display at once. A circle grows as
+// you breathe in, holds, and shrinks as you breathe out, with the phase
+// name and a countdown digit — visual pacing so the eyes can lead the breath
+// and the mind has one thing to come back to. One session is owned here
+// (one timer, one endSession); the panels below are just views of it, so
+// the circles stay in sync across screens.
 //
 // Summon with:
 //   omarchy-shell shell summon luotao.zen '{}'
@@ -115,7 +117,6 @@ Item {
     root.opened = true
     root.applyDnd()
     root.ring("bell.oga")
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function takePendingStart() {
@@ -209,104 +210,130 @@ Item {
     }
   }
 
-  PanelWindow {
-    id: panel
-    visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
-    WlrLayershell.namespace: "zen-breathe"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
-    exclusionMode: ExclusionMode.Ignore
+  // One panel per screen. Variants instantiates this component once for
+  // each screen in Quickshell.screens (and again if a screen is plugged in
+  // mid-session); each panel gets its own screen and its own circle size
+  // from its own dimensions, while the breath state stays shared above.
+  // Only the first screen's panel takes keyboard focus — the rest are
+  // visuals — so Esc/Q always lands in exactly one place.
+  Component {
+    id: breathePanel
+    PanelWindow {
+      id: panel
+      required property var modelData
+      screen: modelData
+      visible: root.opened
+      anchors { top: true; bottom: true; left: true; right: true }
+      color: "transparent"
+      WlrLayershell.namespace: "zen-breathe"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: root.opened && isFirstScreen ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+      exclusionMode: ExclusionMode.Ignore
 
-    readonly property real circleMax: Math.min(width, height) * 0.38
-    readonly property real circleMin: circleMax * 0.42
-    readonly property real circleSize: circleMin + (circleMax - circleMin) * root.breath.fullness
+      // Variants hands the delegate its screen as modelData, but no index
+      // — so the focus panel is the one whose screen is first in
+      // Quickshell.screens, compared by identity.
+      readonly property bool isFirstScreen: modelData === Quickshell.screens[0]
 
-    Rectangle {
-      anchors.fill: parent
-      color: Color.menu.scrim
-    }
+      // Focus belongs to the one panel that takes keys: grab it when the
+      // session opens. This replaces the old callLater in startSession,
+      // which could not reach a keyCatcher inside a per-screen panel.
+      onVisibleChanged: if (visible && isFirstScreen) keyCatcher.forceActiveFocus()
 
-    // The desktop fully gone: a breathing pacer over readable terminals is
-    // just another notification fighting for attention.
-    Rectangle {
-      anchors.fill: parent
-      color: Color.menu.background
-    }
+      readonly property real circleMax: Math.min(width, height) * 0.38
+      readonly property real circleMin: circleMax * 0.42
+      readonly property real circleSize: circleMin + (circleMax - circleMin) * root.breath.fullness
 
-    Item {
-      id: keyCatcher
-      anchors.fill: parent
-      focus: true
-
-      Keys.priority: Keys.BeforeItem
-      Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
-          root.endSession(false)
-          event.accepted = true
-        }
+      Rectangle {
+        anchors.fill: parent
+        color: Color.menu.scrim
       }
-    }
 
-    // Fixed-size stage for the breathing circle so the labels below never
-    // move as it grows and shrinks — a bobbing layout would defeat the calm.
-    Column {
-      anchors.centerIn: parent
-      spacing: Style.space(28)
+      // The desktop fully gone: a breathing pacer over readable terminals is
+      // just another notification fighting for attention.
+      Rectangle {
+        anchors.fill: parent
+        color: Color.menu.background
+      }
 
       Item {
-        width: panel.circleMax
-        height: panel.circleMax
-        anchors.horizontalCenter: parent.horizontalCenter
+        id: keyCatcher
+        anchors.fill: parent
+        focus: true
 
-        // Halo: a faint outer ring at full inhale size, the target the
-        // breath is growing toward.
-        Rectangle {
-          anchors.centerIn: parent
-          width: panel.circleMax
-          height: panel.circleMax
-          radius: width / 2
-          color: "transparent"
-          border.color: root.dim
-          border.width: 1
-          opacity: 0.35
-        }
-
-        Rectangle {
-          anchors.centerIn: parent
-          width: panel.circleSize
-          height: panel.circleSize
-          radius: width / 2
-          color: Qt.alpha(Color.accent, 0.25)
-          border.color: Color.accent
-          border.width: 2
-
-          Text {
-            anchors.centerIn: parent
-            text: root.breath.secsLeft
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Math.round(panel.circleMin * 0.32)
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) {
+            root.endSession(false)
+            event.accepted = true
           }
         }
       }
 
-      Text {
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: root.breath.label
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.title
-      }
+      // Fixed-size stage for the breathing circle so the labels below never
+      // move as it grows and shrinks — a bobbing layout would defeat the calm.
+      Column {
+        anchors.centerIn: parent
+        spacing: Style.space(28)
 
-      Text {
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: root.pattern.name + " · " + Model.formatRemaining(root.remainingSecs) + " left · Esc to end"
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
+        Item {
+          width: panel.circleMax
+          height: panel.circleMax
+          anchors.horizontalCenter: parent.horizontalCenter
+
+          // Halo: a faint outer ring at full inhale size, the target the
+          // breath is growing toward.
+          Rectangle {
+            anchors.centerIn: parent
+            width: panel.circleMax
+            height: panel.circleMax
+            radius: width / 2
+            color: "transparent"
+            border.color: root.dim
+            border.width: 1
+            opacity: 0.35
+          }
+
+          Rectangle {
+            anchors.centerIn: parent
+            width: panel.circleSize
+            height: panel.circleSize
+            radius: width / 2
+            color: Qt.alpha(Color.accent, 0.25)
+            border.color: Color.accent
+            border.width: 2
+
+            Text {
+              anchors.centerIn: parent
+              text: root.breath.secsLeft
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Math.round(panel.circleMin * 0.32)
+            }
+          }
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.breath.label
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          text: root.pattern.name + " · " + Model.formatRemaining(root.remainingSecs) + " left · Esc to end"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
       }
     }
+  }
+
+  Variants {
+    model: Quickshell.screens
+    delegate: breathePanel
   }
 }
