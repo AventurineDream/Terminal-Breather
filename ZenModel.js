@@ -316,6 +316,8 @@ function logRow(dateKey, patternName, minutes, completed) {
 // Argv for appending one row to the meditation log. The row, the path and
 // the header travel as positional args so they are data to the shell, never
 // syntax — a pattern name with shell metacharacters cannot escape the append.
+// No mkdir -p here, unlike persistStatsCommand: if the vault folder is gone,
+// the row is skipped rather than a log created somewhere the vault is not.
 function appendLogCommand(logPath, row) {
   return [
     "sh", "-c",
