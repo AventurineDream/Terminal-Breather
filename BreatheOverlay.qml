@@ -221,20 +221,24 @@ Item {
     PanelWindow {
       id: panel
       required property var modelData
-      required property int index
       screen: modelData
       visible: root.opened
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       WlrLayershell.namespace: "zen-breathe"
       WlrLayershell.layer: WlrLayer.Overlay
-      WlrLayershell.keyboardFocus: root.opened && index === 0 ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+      WlrLayershell.keyboardFocus: root.opened && isFirstScreen ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
+
+      // Variants hands the delegate its screen as modelData, but no index
+      // — so the focus panel is the one whose screen is first in
+      // Quickshell.screens, compared by identity.
+      readonly property bool isFirstScreen: modelData === Quickshell.screens[0]
 
       // Focus belongs to the one panel that takes keys: grab it when the
       // session opens. This replaces the old callLater in startSession,
       // which could not reach a keyCatcher inside a per-screen panel.
-      onVisibleChanged: if (visible && index === 0) keyCatcher.forceActiveFocus()
+      onVisibleChanged: if (visible && isFirstScreen) keyCatcher.forceActiveFocus()
 
       readonly property real circleMax: Math.min(width, height) * 0.38
       readonly property real circleMin: circleMax * 0.42
