@@ -53,7 +53,8 @@ Panel {
       pattern: patternKey || chosenPattern,
       minutes: minutes || chosenMinutes,
       bell: setting("bell", true) !== false,
-      dnd: setting("dnd", true) !== false
+      dnd: setting("dnd", true) !== false,
+      logPath: setting("meditationLogPath", "") || ""
     })
     if (root.bar && root.bar.shell && typeof root.bar.shell.summon === "function")
       root.bar.shell.summon("luotao.zen", payload)
