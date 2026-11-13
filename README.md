@@ -91,6 +91,7 @@ Pattern and length chosen in the panel are written back to `shell.json`, so your
 ```bash
 omarchy bar set luotao.zen bell false   # no bells
 omarchy bar set luotao.zen dnd false    # leave notifications alone
+omarchy bar set luotao.zen meditationLogPath "/home/aven/notes/meditation.md"  # log somewhere else (empty = vault default)
 omarchy bar set luotao.zen animation jupiter   # sun … neptune, iris, orbits, petal, lattice, or random
 ```
 
