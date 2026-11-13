@@ -4,6 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "ZenModel.js" as Model
+import "PlanetArt.js" as Art
 
 // Zen bar widget: an ensō glyph that opens a small panel to pick a breathing
 // pattern and session length, and start. The tooltip carries the streak —
@@ -28,6 +29,7 @@ Panel {
 
   property string chosenPattern: String(setting("pattern", "box"))
   property int chosenMinutes: Number(setting("minutes", 10))
+  property string chosenAnimation: String(setting("animation", "random"))
 
   property var resolvedPatterns: Model.resolvePatterns("")
 
@@ -43,9 +45,15 @@ Panel {
     for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
     entry.pattern = patternKey
     entry.minutes = minutes
+    entry.animation = chosenAnimation
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function cycleAnimation(dir) {
+    chosenAnimation = Art.cycle(chosenAnimation, dir)
+    choose(chosenPattern, chosenMinutes)
   }
 
   function startSession(patternKey, minutes) {
@@ -54,7 +62,8 @@ Panel {
       minutes: minutes || chosenMinutes,
       bell: setting("bell", true) !== false,
       dnd: setting("dnd", true) !== false,
-      logPath: setting("meditationLogPath", "") || ""
+      logPath: setting("meditationLogPath", "") || "",
+      animation: chosenAnimation
     })
     if (root.bar && root.bar.shell && typeof root.bar.shell.summon === "function")
       root.bar.shell.summon("luotao.zen", payload)
@@ -187,6 +196,7 @@ Panel {
           if (n < root.patternKeys.length) idx = n
         }
         if (idx !== -1) root.choose(root.patternKeys[idx], root.chosenMinutes)
+        else if (k === "a") root.cycleAnimation(1)
         else if (k === "s" || k === " ") root.startSession(root.chosenPattern, root.chosenMinutes)
       }
 
@@ -305,6 +315,45 @@ Panel {
           }
         }
 
+        Row {
+          width: parent.width
+          spacing: Style.space(6)
+
+          Button {
+            text: "Prev"
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.cycleAnimation(-1)
+          }
+          Text {
+            textFormat: Text.PlainText
+            text: Art.animation(root.chosenAnimation) ? Art.animation(root.chosenAnimation).name : "Random"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            Layout.fillWidth: true
+            verticalAlignment: Text.AlignVCenter
+            height: implicitHeight
+          }
+          Button {
+            text: "Next"
+            bordered: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.cycleAnimation(1)
+          }
+        }
+
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          wrapMode: Text.WordWrap
+          text: Art.animation(root.chosenAnimation) ? Art.animation(root.chosenAnimation).hint : ""
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
         Button {
           text: "Begin"
           bordered: true
@@ -315,7 +364,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "1-" + Math.min(root.patternKeys.length, 9) + " pattern · Enter begin · Esc close"
+          text: "1-" + Math.min(root.patternKeys.length, 9) + " pattern · a figure · Enter begin · Esc close"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall

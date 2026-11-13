@@ -1,6 +1,6 @@
 # Terminal-Breather
 
-Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plugin (Omarchy 4 "Quattro" or later). A fullscreen visual pacer — a circle that grows as you breathe in and shrinks as you breathe out — so the eyes lead the breath and the mind has one thing to come back to.
+Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plugin (Omarchy 4 "Quattro" or later). A fullscreen visual pacer — an ASCII planet or mandala that grows as you breathe in and shrinks as you breathe out — so the eyes lead the breath and the mind has one thing to come back to.
 
 Pairs with [OmaPomodorchy](https://github.com/AventurineDream/OmoPomodorachy) — the pomodoro timer opens the Breather automatically when a break starts. Install both with one command each (see Install below).
 
@@ -11,8 +11,9 @@ Pairs with [OmaPomodorchy](https://github.com/AventurineDream/OmoPomodorachy) �
   <img src="screenshots/panel.png" alt="Bar panel with weekly practice view" width="26%" />
 </p>
 
-- **Breathing pacer** (fullscreen overlay) — pick a pattern, pick a length, breathe. Phase name and a countdown digit ride along; the desktop is fully hidden for the duration.
-- **Bar widget** — an ensō in the bar: click to choose pattern and length, middle-click to start your usual session immediately. The tooltip carries your daily streak, the panel a seven-day practice view.
+- **Breathing pacer** (fullscreen overlay) — pick a pattern, pick a length, breathe. The figure scales with the breath; phase name and a countdown ride along. The desktop is fully hidden for the duration.
+- **Figure** — Sun through Neptune, plus four geometric mandalas (an aperture, orbital tracks, an eight-petal form, a twelve-spoke lattice). `random` picks one per session. Prev/Next in the panel, or `a`, cycles the choice. No five- or six-pointed stars.
+- **Bar widget** — an ensō in the bar: click to choose pattern, length, and figure; middle-click starts the usual session immediately. The tooltip carries the daily streak, the panel a seven-day practice view.
 - **Session tracking** — minutes per day in `~/.local/state/omarchy/zen/stats.json`. Ending early still logs the minutes you actually practiced: a streak kept by a short session beats one lost to perfectionism.
 - **Session comforts** — a soft bell at start and end, and do-not-disturb engaged for the duration (borrowed, not owned: your previous DND state is restored afterwards). Both on by default, both optional.
 
@@ -90,10 +91,10 @@ Pattern and length chosen in the panel are written back to `shell.json`, so your
 ```bash
 omarchy bar set luotao.zen bell false   # no bells
 omarchy bar set luotao.zen dnd false    # leave notifications alone
-omarchy bar set luotao.zen meditationLogPath "/home/aven/notes/meditation.md"  # log somewhere else (empty = vault default)
+omarchy bar set luotao.zen animation jupiter   # sun … neptune, iris, orbits, petal, lattice, or random
 ```
 
-Per-summon overrides work too: `'{"pattern": "box", "minutes": 10, "bell": false, "dnd": false}'`.
+Per-summon overrides work too: `'{"pattern": "box", "minutes": 10, "animation": "saturn", "bell": false, "dnd": false}'`.
 
 ## Uninstall
 
@@ -110,10 +111,11 @@ Remove any keybindings you added to `~/.config/hypr/bindings.lua`. Your practice
 
 ## Development
 
-The pure model (`ZenModel.js`) is covered by a node harness — no shell needed:
+The pure model (`ZenModel.js`) and the figure renderer (`PlanetArt.js`) are covered by node harnesses — no shell needed:
 
 ```bash
 node test/ZenModel.test.js
+node test/PlanetArt.test.js
 ```
 
 The QML layer (FileView timing, panel wiring) is reviewed by diff and verified on a live Omarchy shell.
