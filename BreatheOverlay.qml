@@ -5,6 +5,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "ZenModel.js" as Model
+import "PlanetArt.js" as Art
 
 // Fullscreen breathing pacer, on every display at once. A circle grows as
 // you breathe in, holds, and shrinks as you breathe out, with the phase
@@ -38,6 +39,7 @@ Item {
   property string fontFamily: Style.font.menuFamily
 
   property var pattern: Model.pattern("box")
+  property string figureId: "earth"
   property double startedAt: 0
   property int totalSecs: 600
   property double nowMs: Date.now()
@@ -114,6 +116,7 @@ Item {
 
     root.nowMs = Date.now()
     root.startedAt = root.nowMs
+    root.figureId = Art.resolveAnimation(payload.animation, root.startedAt)
     root.opened = true
     root.applyDnd()
     root.ring("bell.oga")
@@ -201,7 +204,7 @@ Item {
   }
 
   Timer {
-    interval: 100
+    interval: 50
     running: root.opened && root.startedAt > 0
     repeat: true
     onTriggered: {
@@ -241,19 +244,42 @@ Item {
       onVisibleChanged: if (visible && isFirstScreen) keyCatcher.forceActiveFocus()
 
       readonly property real circleMax: Math.min(width, height) * 0.38
-      readonly property real circleMin: circleMax * 0.42
-      readonly property real circleSize: circleMin + (circleMax - circleMin) * root.breath.fullness
+      readonly property int figureRows: Art.maxCells(circleMax)
+      readonly property real figureAspect: figureMetric.implicitWidth > 0 && figureMetric.implicitHeight > 0
+        ? figureMetric.implicitWidth / figureMetric.implicitHeight : 0.5
+      readonly property var figure: root.opened
+        ? Art.frame(root.figureId, {
+            maxCells: figureRows,
+            aspect: figureAspect,
+            timeMs: root.elapsedSecs * 1000,
+            fullness: root.breath.fullness
+          })
+        : Art.emptyFrame()
+      readonly property real figureFontPx: {
+        var adv = figureMetric.implicitWidth / 20
+        var line = figureMetric.implicitHeight / 20
+        if (!(adv > 0) || !(line > 0)) return 12
+        var need = Math.max(figure.cols * adv, figure.rows * line)
+        return Math.max(8, circleMax / Math.max(1, need))
+      }
+      readonly property real figureAdvance: figureMetric.implicitWidth / 20 * figureFontPx
+      readonly property real figureLine: figureMetric.implicitHeight / 20 * figureFontPx
 
-      Rectangle {
-        anchors.fill: parent
-        color: Color.menu.scrim
+      Text {
+        id: figureMetric
+        visible: false
+        text: "M"
+        textFormat: Text.PlainText
+        font.family: "JetBrainsMono Nerd Font"
+        font.pixelSize: 20
+        font.kerning: false
       }
 
-      // The desktop fully gone: a breathing pacer over readable terminals is
-      // just another notification fighting for attention.
+      // Opaque on purpose. Menu surfaces carry an alpha; a breathing pacer
+      // over a readable terminal is just another notification.
       Rectangle {
         anchors.fill: parent
-        color: Color.menu.background
+        color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
       }
 
       Item {
@@ -270,51 +296,81 @@ Item {
         }
       }
 
-      // Fixed-size stage for the breathing circle so the labels below never
-      // move as it grows and shrinks — a bobbing layout would defeat the calm.
+      // Fixed stage. The figure scales inside it; the labels stay put.
       Column {
         anchors.centerIn: parent
-        spacing: Style.space(28)
+        spacing: Style.space(18)
 
         Item {
           width: panel.circleMax
           height: panel.circleMax
           anchors.horizontalCenter: parent.horizontalCenter
 
-          // Halo: a faint outer ring at full inhale size, the target the
-          // breath is growing toward.
           Rectangle {
             anchors.centerIn: parent
-            width: panel.circleMax
-            height: panel.circleMax
+            width: Math.max(1, panel.figure.disk * 2 * panel.figureLine)
+            height: width
             radius: width / 2
             color: "transparent"
             border.color: root.dim
             border.width: 1
-            opacity: 0.35
+            opacity: 0.28
           }
 
-          Rectangle {
+          Item {
             anchors.centerIn: parent
-            width: panel.circleSize
-            height: panel.circleSize
-            radius: width / 2
-            color: Qt.alpha(Color.accent, 0.25)
-            border.color: Color.accent
-            border.width: 2
+            width: panel.figure.cols * panel.figureAdvance
+            height: panel.figure.rows * panel.figureLine
+            scale: panel.figure.scale > 0 ? panel.figure.scale : 1
 
             Text {
-              anchors.centerIn: parent
-              text: root.breath.secsLeft
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Math.round(panel.circleMin * 0.32)
+              anchors.fill: parent
+              textFormat: Text.PlainText
+              text: panel.figure.layers.length > 0 ? panel.figure.layers[0].text : ""
+              color: panel.figure.layers.length > 0 ? panel.figure.layers[0].color : "transparent"
+              font.family: "JetBrainsMono Nerd Font"
+              font.pixelSize: panel.figureFontPx
+              font.kerning: false
+              lineHeightMode: Text.FixedHeight
+              lineHeight: panel.figureLine
+              wrapMode: Text.NoWrap
+              horizontalAlignment: Text.AlignLeft
+              verticalAlignment: Text.AlignTop
+            }
+            Text {
+              anchors.fill: parent
+              textFormat: Text.PlainText
+              text: panel.figure.layers.length > 1 ? panel.figure.layers[1].text : ""
+              color: panel.figure.layers.length > 1 ? panel.figure.layers[1].color : "transparent"
+              font.family: "JetBrainsMono Nerd Font"
+              font.pixelSize: panel.figureFontPx
+              font.kerning: false
+              lineHeightMode: Text.FixedHeight
+              lineHeight: panel.figureLine
+              wrapMode: Text.NoWrap
+              horizontalAlignment: Text.AlignLeft
+              verticalAlignment: Text.AlignTop
+            }
+            Text {
+              anchors.fill: parent
+              textFormat: Text.PlainText
+              text: panel.figure.layers.length > 2 ? panel.figure.layers[2].text : ""
+              color: panel.figure.layers.length > 2 ? panel.figure.layers[2].color : "transparent"
+              font.family: "JetBrainsMono Nerd Font"
+              font.pixelSize: panel.figureFontPx
+              font.kerning: false
+              lineHeightMode: Text.FixedHeight
+              lineHeight: panel.figureLine
+              wrapMode: Text.NoWrap
+              horizontalAlignment: Text.AlignLeft
+              verticalAlignment: Text.AlignTop
             }
           }
         }
 
         Text {
           anchors.horizontalCenter: parent.horizontalCenter
+          textFormat: Text.PlainText
           text: root.breath.label
           color: root.foreground
           font.family: root.fontFamily
@@ -323,7 +379,17 @@ Item {
 
         Text {
           anchors.horizontalCenter: parent.horizontalCenter
-          text: root.pattern.name + " · " + Model.formatRemaining(root.remainingSecs) + " left · Esc to end"
+          textFormat: Text.PlainText
+          text: root.breath.secsLeft
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Math.round(panel.circleMax * 0.14)
+        }
+
+        Text {
+          anchors.horizontalCenter: parent.horizontalCenter
+          textFormat: Text.PlainText
+          text: (Art.animation(root.figureId) ? Art.animation(root.figureId).name : "") + " · " + root.pattern.name + " · " + Model.formatRemaining(root.remainingSecs) + " left · Esc to end"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
