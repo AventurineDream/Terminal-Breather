@@ -55,9 +55,7 @@ omarchy plugin add https://github.com/AventurineDream/OmoPomodorachy.git --enabl
 
 ## Demo
 
-<video src="demo-terminal-breather.mp4" controls></video>
-
-A short look at the breathing overlay: the circle grows as you breathe in and shrinks as you breathe out, with the phase name and countdown riding along.
+[Watch the demo video](demo-terminal-breather.mp4) — a short look at the breathing overlay: the circle grows as you breathe in and shrinks as you breathe out, with the phase name and countdown riding along.
 
 ## Keybinding
 
