@@ -2,6 +2,8 @@
 
 Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plugin (Omarchy 4 "Quattro" or later). A fullscreen visual pacer — a circle that grows as you breathe in and shrinks as you breathe out — so the eyes lead the breath and the mind has one thing to come back to.
 
+Pairs with [OmaPomodorchy](https://github.com/AventurineDream/OmoPomodorachy) — the pomodoro timer opens the Breather automatically when a break starts. Install both with one command each (see Install below).
+
 > Fork of [ya-luotao/omarchy-zen](https://github.com/ya-luotao/omarchy-zen), maintained here as Terminal-Breather.
 
 <p align="center">
