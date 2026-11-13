@@ -1,6 +1,8 @@
-# Zen for Omarchy
+# Terminal-Breather
 
 Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plugin (Omarchy 4 "Quattro" or later). A fullscreen visual pacer — a circle that grows as you breathe in and shrinks as you breathe out — so the eyes lead the breath and the mind has one thing to come back to.
+
+Pairs with [OmaPomodorchy](https://github.com/AventurineDream/OmoPomodorachy) — the pomodoro timer opens the Breather automatically when a break starts. Install both with one command each (see Install below).
 
 > Fork of [ya-luotao/omarchy-zen](https://github.com/ya-luotao/omarchy-zen), maintained here as Terminal-Breather.
 
@@ -44,6 +46,16 @@ By default the log is `~/Projects/Obsidian/Home/20_Practices/Meditation/Meditati
 ```bash
 omarchy plugin add https://github.com/AventurineDream/Terminal-Breather.git --enable
 ```
+
+Pairs with OmaPomodorchy (optional — the timer opens the Breather when a break starts):
+
+```bash
+omarchy plugin add https://github.com/AventurineDream/OmoPomodorachy.git --enable
+```
+
+## Demo
+
+[Watch the demo video](demo-terminal-breather.mp4) — a short look at the breathing overlay: the circle grows as you breathe in and shrinks as you breathe out, with the phase name and countdown riding along.
 
 ## Keybinding
 
