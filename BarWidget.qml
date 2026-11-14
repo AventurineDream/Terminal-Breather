@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import QtQuick.Layouts
 import qs.Commons
 import qs.Ui
 import "ZenModel.js" as Model
@@ -315,7 +316,7 @@ Panel {
           }
         }
 
-        Row {
+        RowLayout {
           width: parent.width
           spacing: Style.space(6)
 
