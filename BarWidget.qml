@@ -7,7 +7,7 @@ import qs.Ui
 import "ZenModel.js" as Model
 import "PlanetArt.js" as Art
 
-// Zen bar widget: an ensō glyph that opens a small panel to pick a breathing
+// Terminal Breather bar widget: an ensō glyph that opens a small panel to pick a breathing
 // pattern and session length, and start. The tooltip carries the streak —
 // the habit loop lives in the corner of the eye, the practice fullscreen.
 Panel {
@@ -164,7 +164,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    tooltipText: "Zen — " + root.summary
+    tooltipText: "Terminal Breather — " + root.summary
 
     iconComponent: Component {
       Item {
@@ -275,7 +275,7 @@ Panel {
 
           PanelHero {
           width: parent.width
-          title: "Zen"
+          title: "Terminal Breather"
           meta: root.summary
           foreground: root.foreground
           fontFamily: root.fontFamily

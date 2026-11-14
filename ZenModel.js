@@ -1,6 +1,6 @@
 .pragma library
 
-// Pure helpers for the Zen plugin: breathing patterns, session math, and
+// Pure helpers for the Terminal Breather plugin: breathing patterns, session math, and
 // streak bookkeeping. No Qt imports — everything here is testable data-in
 // data-out.
 
