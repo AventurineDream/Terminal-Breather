@@ -37,6 +37,39 @@ Panel {
   readonly property var patternKeys: resolvedPatterns.order
   readonly property var minuteChoices: [5, 10, 15, 20]
 
+  // Settings section (collapsible, panel-local state).
+  property bool settingsExpanded: false
+  // All figure ids in manifest order: random first, then planets, then mandalas.
+  readonly property var figureIds: ["random", "sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune", "iris", "orbits", "petal", "lattice"]
+  // True while the log-path field has focus; the key catcher stays blocked
+  // so typing/Enter/Escape go to the editor, not to panel actions.
+  readonly property bool editorActive: logPathField.activeFocus
+
+  function settingValue(key, fallback) {
+    if (root.settings && root.settings[key] !== undefined)
+      return root.settings[key]
+    return fallback
+  }
+
+  // Write one settings key. updateEntryInline REPLACES the whole bar
+  // entry, so the full settings object is passed every time — copied
+  // from the existing settings, with the key set. Copying instead of
+  // rebuilding from a hardcoded key list means a key added later (or
+  // set by hand) is never wiped by a panel change.
+  function updateSetting(key, value) {
+    var s = { id: root.moduleName }
+    if (root.settings) {
+      for (var k in root.settings)
+        if (k !== "id") s[k] = root.settings[k]
+    }
+    s[key] = value
+    root.settings = s
+    if (key === "animation")
+      chosenAnimation = String(value)
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, s)
+  }
+
   function choose(patternKey, minutes) {
     chosenPattern = patternKey
     chosenMinutes = minutes
@@ -75,8 +108,9 @@ Panel {
 
   // A watch established while the file doesn't exist yet never fires, so
   // reload whenever the panel opens — the streak is fresh every time it is
-  // actually looked at.
-  onOpenedChanged: if (opened) { statsFile.reload(); patternsFile.reload() }
+  // actually looked at. The log-path field is reset to the current setting
+  // on open, so it never shows a stale half-typed value.
+  onOpenedChanged: if (opened) { statsFile.reload(); patternsFile.reload(); logPathField.text = String(setting("meditationLogPath", "")) }
 
   FileView {
     id: statsFile
@@ -186,6 +220,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.editorActive
 
       onCloseRequested: root.close()
       onReturnRequested: root.startSession(root.chosenPattern, root.chosenMinutes)
@@ -355,6 +390,148 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
         }
+
+        // Settings: figure picker, bell, do-not-disturb, and the
+        // meditation-log path. Collapsed by default so the session
+        // setup stays the focus; every change writes back to shell.json
+        // via updateEntryInline, so it is the default from then on.
+        Column {
+          width: parent.width
+          spacing: Style.space(8)
+
+          MouseArea {
+            width: parent.width
+            height: settingsHeader.implicitHeight
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.settingsExpanded = !root.settingsExpanded
+
+            Text {
+              id: settingsHeader
+              text: (root.settingsExpanded ? "v " : "> ") + "Settings"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.settingsExpanded
+
+            Text {
+              text: "Figure"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Repeater {
+                model: root.figureIds
+
+                Button {
+                  required property string modelData
+                  text: modelData === "random" ? "Random" : (Art.animation(modelData) ? Art.animation(modelData).name : modelData)
+                  tooltipText: modelData === "random" ? "Pick a random figure each session" : (Art.animation(modelData) ? Art.animation(modelData).hint : "")
+                  bordered: true
+                  selected: root.chosenAnimation === modelData
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.updateSetting("animation", modelData)
+                }
+              }
+            }
+
+            Text {
+              text: "Bell"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(6)
+              Button {
+                text: "On"
+                bordered: true
+                selected: root.settingValue("bell", true) !== false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("bell", true)
+              }
+              Button {
+                text: "Off"
+                bordered: true
+                selected: root.settingValue("bell", true) === false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("bell", false)
+              }
+            }
+
+            Text {
+              text: "Do not disturb"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(6)
+              Button {
+                text: "On"
+                bordered: true
+                selected: root.settingValue("dnd", true) !== false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("dnd", true)
+              }
+              Button {
+                text: "Off"
+                bordered: true
+                selected: root.settingValue("dnd", true) === false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("dnd", false)
+              }
+            }
+
+            Text {
+              text: "Meditation log"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            TextField {
+              id: logPathField
+              width: parent.width
+              placeholderText: "Vault default (empty)"
+              text: String(root.setting("meditationLogPath", ""))
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onAccepted: {
+                root.updateSetting("meditationLogPath", text)
+                logPathField.focus = false
+              }
+              Keys.onEscapePressed: logPathField.focus = false
+            }
+
+            Text {
+              width: parent.width
+              text: "Empty = the vault default. Enter saves."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+          }
+        }
+
         Button {
           text: "Begin"
           bordered: true
