@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -315,7 +316,7 @@ Panel {
           }
         }
 
-        Row {
+        RowLayout {
           width: parent.width
           spacing: Style.space(6)
 
