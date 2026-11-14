@@ -17,7 +17,7 @@
 #     the phone — so instead it runs a breathing guide right here in
 #     the terminal, with the same patterns and timings: a circle that
 #     grows as you breathe in, holds, and shrinks as you breathe out,
-#     with the phase name and countdown riding along.
+#     coloured by phase, with the phase name and countdown riding along.
 #
 # Usage: tb [--gui | --term] [pattern] [minutes]
 #   --gui    force the fullscreen overlay (even over SSH)
@@ -79,10 +79,20 @@ if [ "$mode" = "term" ]; then
   exec python3 "$TB_GUIDE" "$pattern" "$minutes"
 fi
 
-# GUI overlay: needs the desktop session variables, so they are picked up
-# from the user systemd environment before summoning.
-# shellcheck disable=SC2046
-export $(systemctl --user show-environment 2>/dev/null | grep -E '^(WAYLAND_DISPLAY|DISPLAY|XDG_RUNTIME_DIR|HYPRLAND_INSTANCE_SIGNATURE|OMARCHY_PATH)=' | xargs)
+# GUI overlay: pick up the desktop session variables from the user
+# systemd environment before summoning. Read one KEY=value line at a
+# time and export only the keys the shell needs — never an unquoted
+# word-split expansion, so a value with spaces or shell metacharacters
+# cannot break the summon or run anything unexpected. (The loop reads
+# from a process substitution, not a pipe, so it runs in this shell and
+# the exports survive.)
+while IFS='=' read -r key value; do
+  case "$key" in
+    WAYLAND_DISPLAY|DISPLAY|XDG_RUNTIME_DIR|HYPRLAND_INSTANCE_SIGNATURE|OMARCHY_PATH)
+      export "$key=$value"
+      ;;
+  esac
+done < <(systemctl --user show-environment 2>/dev/null)
 
 payload="$(jq -cn --arg pattern "$pattern" --argjson minutes "$minutes" \
   '{pattern: $pattern, minutes: $minutes}')"
