@@ -513,7 +513,7 @@ Panel {
               placeholderText: "Vault default (empty)"
               text: String(root.setting("meditationLogPath", ""))
               foreground: root.foreground
-              fontFamily: root.fontFamily
+              font.family: root.fontFamily
               onAccepted: {
                 root.updateSetting("meditationLogPath", text)
                 logPathField.focus = false
