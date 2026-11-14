@@ -380,9 +380,9 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     t = p.light * (0.74 + 0.08 * (cloud - 0.5))
     var armLon = wrap(lon)
     var arm = Math.abs(Math.abs(lat) - Math.max(0, armLon) * 0.48)
-    if (arm < 0.09 && lat > -0.52 && lat < 0.52 && armLon > -0.1 && armLon < 1.25) {
+    if (arm < 0.11 && lat > -0.52 && lat < 0.52 && armLon > -0.1 && armLon < 1.25) {
       layer = 2
-      t = p.light * 0.42
+      t = p.light * 0.30
     }
   } else if (id === "earth") {
     var tile = mapChar(EARTH, lat, lon)
@@ -425,7 +425,7 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
       var ray = Math.abs(wrap(tang - 0.4))
       var ray2 = Math.abs(wrap(tang - 2.2))
       var ray3 = Math.abs(wrap(tang + 1.2))
-      if (ray < 0.045 || ray2 < 0.04 || ray3 < 0.05) {
+      if (ray < 0.08 || ray2 < 0.08 || ray3 < 0.08) {
         layer = 1
         t = Math.max(t, p.light * 0.78)
       }
@@ -480,7 +480,7 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     var spot = ellipse(lat, lon, -0.24, 0.20, 0.24, 0.42)
     if (spot) {
       layer = 2
-      t = p.light * 0.26
+      t = p.light * 0.18
     }
     var nc = fbm(lon * 3.2, lat * 4.2, seed + 6, 3)
     if (!spot && nc > 0.72 && Math.abs(lat) < 0.7 && p.nz > 0.4) {
