@@ -236,12 +236,42 @@ Panel {
         else if (k === "s" || k === " ") root.startSession(root.chosenPattern, root.chosenMinutes)
       }
 
-      Column {
-        id: column
-        width: parent.width
-        spacing: Style.space(12)
+      Flickable {
+        id: scroller
+        anchors.fill: parent
+        clip: true
+        contentWidth: width
+        contentHeight: column.implicitHeight
 
-        PanelHero {
+        // Wheel events were not reaching the Flickable's built-in handler
+        // on this surface (drag scrolled, the wheel did not). Root cause
+        // is UNKNOWN. This explicit handler is a workaround, ported from
+        // OmoPomodorachy PR #11 (1.9.1) via Ohm-My-Usage Phase 1: if the
+        // built-in wheel handling ever starts working, REMOVE this
+        // WheelHandler, or the page will scroll twice per wheel step
+        // (double scroll). Touchpads report smooth pixel deltas; a mouse
+        // wheel reports angle deltas in 120ths of a degree per notch.
+        // 48px per notch is a comfortable step. The event is only
+        // accepted when the content actually moves, so a wheel step at
+        // the top or bottom still propagates.
+        WheelHandler {
+          onWheel: function (event) {
+            var step = event.pixelDelta.y !== 0 ? event.pixelDelta.y : event.angleDelta.y / 120 * 48;
+            var maxY = scroller.originY + Math.max(0, scroller.contentHeight - scroller.height);
+            var next = Math.max(scroller.originY, Math.min(scroller.contentY - step, maxY));
+            if (next !== scroller.contentY) {
+              scroller.contentY = next;
+              event.accepted = true;
+            }
+          }
+        }
+
+        Column {
+          id: column
+          width: parent.width
+          spacing: Style.space(12)
+
+          PanelHero {
           width: parent.width
           title: "Zen"
           meta: root.summary
@@ -548,6 +578,7 @@ Panel {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
         }
+      }
       }
     }
   }
