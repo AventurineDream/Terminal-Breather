@@ -10,7 +10,7 @@ Guided-breathing meditation as a native [Omarchy](https://omarchy.org) shell plu
 </p>
 
 - **Breathing pacer** (fullscreen overlay) — pick a pattern, pick a length, breathe. The figure scales with the breath; phase name and a countdown ride along. The desktop is fully hidden for the duration.
-- **Figure** — Sun through Neptune, plus four geometric mandalas (an aperture, orbital tracks, an eight-petal form, a twelve-spoke lattice). `random` picks one per session. Prev/Next in the panel, or `a`, cycles the choice. No five- or six-pointed stars.
+- **Figure** — Sun, Moon, and the planets through Neptune, plus four geometric mandalas (an aperture, orbital tracks, an eight-petal form, a twelve-spoke lattice). `random` picks one per session. Prev/Next in the panel, or `a`, cycles the choice (`a` steps forward, Prev steps back). No five- or six-pointed stars. The figure is fixed once a session starts — pick it in the panel before Begin.
 - **Bar widget** — an ensō in the bar: click to choose pattern, length, and figure; middle-click starts the usual session immediately. The tooltip carries the daily streak, the panel a seven-day practice view.
 - **Session tracking** — minutes per day in `~/.local/state/omarchy/zen/stats.json`. Ending early still logs the minutes you actually practiced: a streak kept by a short session beats one lost to perfectionism.
 - **Session comforts** — a soft bell at start and end, and do-not-disturb engaged for the duration (borrowed, not owned: your previous DND state is restored afterwards). Both on by default, both optional.
@@ -63,7 +63,7 @@ Omit the payload keys to use the defaults (`{}` works too).
 - Middle-click the ensō → start immediately with your saved defaults
 - During a session: `Esc` ends early (practice up to that point still counts)
 - Session complete → a notification with your updated streak
-- The session shows on every display at once, circles in sync — Esc works from whichever screen you are looking at (keyboard focus sits on the first screen's panel)
+- The session shows on every display at once, circles in sync — Esc works from any screen (keyboard focus is held by the first screen's panel)
 
 From scripts:
 
@@ -79,7 +79,7 @@ Pattern and length chosen in the panel are written back to `shell.json`, so your
 ```bash
 omarchy bar set luotao.zen bell false   # no bells
 omarchy bar set luotao.zen dnd false    # leave notifications alone
-omarchy bar set luotao.zen animation jupiter   # sun … neptune, iris, orbits, petal, lattice, or random
+omarchy bar set luotao.zen animation jupiter   # sun, mercury, venus, earth, moon, mars, jupiter, saturn, uranus, neptune, iris, orbits, petal, lattice, or random
 ```
 
 Per-summon overrides work too: `'{"pattern": "box", "minutes": 10, "animation": "saturn", "bell": false, "dnd": false}'`.

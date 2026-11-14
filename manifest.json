@@ -34,7 +34,8 @@
       "pattern": "box",
       "minutes": 10,
       "bell": true,
-      "dnd": true
+      "dnd": true,
+      "animation": "random"
     },
     "schema": [
       {
