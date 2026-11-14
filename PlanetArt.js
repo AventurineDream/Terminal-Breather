@@ -21,9 +21,6 @@ var BAYER = [
 var LX = -0.348
 var LY = 0.419
 var LZ = 0.838
-var HX = -0.182
-var HY = 0.219
-var HZ = 0.959
 
 var FIGURES = [
   { id: "sun", name: "Sun", kind: "body", hint: "granules, limb darkening, a slow boil" },
@@ -47,28 +44,30 @@ var i
 for (i = 0; i < FIGURES.length; i++) BY_ID[FIGURES[i].id] = FIGURES[i]
 
 // Equirectangular sketch, 48 x 24. Col 0 is lon -180, row 0 is the north pole.
-// '#' land, '*' ice, '.' ocean. Tuned so a hemisphere reads as Earth, not a copy
-// of any chart.
+// '#' land, '*' ice, '.' ocean. Not a chart: the near side (spin 0) puts the
+// Americas in the lit center-left with a waist, Africa just east of center,
+// and ocean out to the dark limb. Asia and Australia sit past that limb so
+// the far side is Pacific, not a blank ball.
 var EARTH = [
   "************************************************",
   "************************************************",
   "************************************************",
-  "...#####.#########*.....###.....########........",
-  "...#####.##########.....####...########.........",
-  "...........########......##############.........",
-  "..........########.....###...##########.........",
-  "..........########......###....########.........",
-  "............######......###############.........",
-  "...........#######.....####.###...#####.........",
-  "...........#####........####.....##..##.........",
-  ".............###........####.........##.........",
-  "..............###.......####...........##.......",
-  "...............##.........##....................",
-  "...............##.........##............###.....",
-  "...............##.........##............###.....",
-  "..............##...........#..............#.....",
-  "..............##................................",
-  "..............#.................................",
+  "................................................",
+  "...................#####...####.................",
+  "..................######..#####..........######.",
+  "..................#####....###..........#######.",
+  "...................####.................######..",
+  "....................##...................#####..",
+  "....................##....#####...........####..",
+  "....................##....######........####....",
+  "....................##.....####.#.......###.....",
+  "...................####....####..........##.....",
+  "...................#####....###.................",
+  "...................#####....##..................",
+  "....................###......#..#...............",
+  "....................##....................#####.",
+  "....................##....................#####.",
+  "....................#......................###..",
   "................................................",
   "................................................",
   "************************************************",
@@ -85,6 +84,18 @@ var MARIA = [
   { lat: -0.08, lon: 0.78, ry: 0.12, rx: 0.16 },
   { lat: -0.32, lon: -0.25, ry: 0.16, rx: 0.22 },
   { lat: -0.40, lon: -0.70, ry: 0.12, rx: 0.14 }
+]
+
+// A few basins large enough to show a dark floor and a bright rim at 21 cells.
+// Rays are irregular ejecta, not a star polygon.
+var MERCURY_CRATERS = [
+  { lat: 0.20, lon: -0.40, r: 0.30 },
+  { lat: -0.32, lon: -0.08, r: 0.16 },
+  { lat: 0.06, lon: 0.62, r: 0.22, rays: true },
+  { lat: 0.46, lon: 1.35, r: 0.18 },
+  { lat: -0.22, lon: 2.05, r: 0.26 },
+  { lat: 0.12, lon: -1.70, r: 0.20 },
+  { lat: -0.42, lon: 2.90, r: 0.15 }
 ]
 
 function clamp01(v) {
@@ -356,57 +367,88 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
   var lon = p.lon
 
   if (id === "sun") {
-    var boil = timeMs / 8000
+    var boil = timeMs / 9000
     var g = fbm(lon * 5 + boil, lat * 5 + boil * 0.4, seed, 4)
     t = Math.pow(p.nz, 0.42) * (0.48 + 0.52 * g)
-    if (t > 0.80) t = 0.80
-    var s
-    for (s = 0; s < 3; s++) {
-      var slat = (hash2(s, 8, seed) - 0.5) * 1.2
-      var slon = (hash2(s, 9, seed) - 0.5) * 4 + spin * 0.35
-      var sd = angDist(lat, lon, slat, slon)
-      var sr = 0.06 + hash2(s, 10, seed) * 0.05
-      if (sd < sr) t *= 0.55
-      else if (sd < sr * 1.7) t *= 0.75
+    if (t > 0.72) t = 0.72
+    var grain = fbm(lon * 10 + boil * 1.2, lat * 10, seed + 9, 2)
+    if (grain > 0.70 && p.nz > 0.50) {
+      layer = 1
+      t = 0.78
     }
-    if (t > 0.78) layer = 1
+    var spots = [
+      [0.34, -0.62, 0.11],
+      [-0.20, 0.78, 0.08],
+      [0.05, 2.10, 0.10]
+    ]
+    var s
+    for (s = 0; s < spots.length; s++) {
+      var sd = angDist(lat, lon, spots[s][0], spots[s][1] + spin * 0.35)
+      var sr = spots[s][2]
+      if (sd < sr) {
+        layer = 0
+        t = Math.max(t * 0.42, 0.14)
+      } else if (sd < sr * 1.65) {
+        if (layer === 1) layer = 0
+        t = Math.max(t * 0.68, 0.16)
+      }
+    }
   } else if (id === "mercury") {
-    var cr = craterField(lat, lon, seed, 16, true)
-    var grain = fbm(lon * 6, lat * 6, seed, 2)
-    t = p.light * (0.58 + 0.22 * grain + cr.shade + cr.bright)
-    if (cr.bright > 0.08) layer = 1
+    var grain = fbm(lon * 5, lat * 5, seed, 2)
+    t = p.light * (0.56 + 0.12 * grain)
+    var n
+    for (n = 0; n < MERCURY_CRATERS.length; n++) {
+      var mc = MERCURY_CRATERS[n]
+      var d = angDist(lat, lon, mc.lat, mc.lon)
+      if (d < mc.r * 0.60) {
+        layer = 2
+        t = Math.max(p.light * 0.20, 0.08)
+      } else if (d < mc.r * 0.94) {
+        layer = 1
+        t = Math.min(0.82, Math.max(p.light * 1.0, 0.36))
+      }
+      if (mc.rays && d > mc.r * 0.8 && d < mc.r * 3.4) {
+        var ang = Math.atan2(lat - mc.lat, wrap(lon - mc.lon))
+        var rk
+        var rayAng = [0.35, 2.15, -1.15]
+        for (rk = 0; rk < rayAng.length; rk++) {
+          if (d * Math.abs(Math.sin(wrap(ang - rayAng[rk]))) < 0.034) {
+            layer = 1
+            t = Math.min(0.82, Math.max(t, p.light * 0.92))
+            break
+          }
+        }
+      }
+    }
   } else if (id === "venus") {
-    var cloud = fbm(lon * 1.3 + timeMs / 70000, lat * 1.7, seed + 4, 3)
-    t = p.light * (0.74 + 0.08 * (cloud - 0.5))
-    var armLon = wrap(lon)
-    var arm = Math.abs(Math.abs(lat) - Math.max(0, armLon) * 0.48)
-    if (arm < 0.11 && lat > -0.52 && lat < 0.52 && armLon > -0.1 && armLon < 1.25) {
+    var cloud = fbm(lon * 1.4 + timeMs / 80000, lat * 2.2, seed + 4, 3)
+    var streak = 0.5 + 0.5 * Math.sin(lat * 8 + (cloud - 0.5) * 1.2)
+    t = p.light * (0.72 + 0.05 * (cloud - 0.5) + 0.035 * (streak - 0.5))
+    // Opens west, into the lit face, so both arms cross a glyph boundary.
+    var armLon = wrap(-lon)
+    var arm = Math.abs(Math.abs(lat) - Math.max(0, armLon) * 0.58)
+    if (arm < 0.125 && Math.abs(lat) < 0.52 && armLon > -0.04 && armLon < 0.82) {
       layer = 2
-      t = p.light * 0.30
+      t = Math.max(p.light * 0.20, 0.09)
     }
   } else if (id === "earth") {
     var tile = mapChar(EARTH, lat, lon)
-    var ice = tile === "*" || Math.abs(lat) > 1.38
+    var ice = (tile === "*" || lat > 1.38) && lat > -0.95
     var land = tile === "#"
     var deck = curl(lon * 0.7 + timeMs / 42000, lat * 0.55, seed)
-    var polarFloor = Math.abs(lat) > 1.02 ? 0.055 : 0
-    var spec = (p.nx - HX) * (p.nx - HX) + (p.ny - HY) * (p.ny - HY) + (p.nz - HZ) * (p.nz - HZ)
-    if (deck > 0.68 && p.nz > 0.25) {
+    if (deck > 0.58 && p.nz > 0.30 && !ice && !land) {
       layer = 2
-      t = p.light * (0.84 + 0.14 * deck)
+      t = p.light * (0.90 + 0.08 * deck)
     } else if (ice) {
       layer = 2
       t = p.light * 0.94
     } else if (land) {
       layer = 1
-      t = p.light * (0.70 + 0.12 * fbm(lon * 3, lat * 3, seed, 2))
+      t = p.light * (0.76 + 0.08 * fbm(lon * 3, lat * 3, seed, 2))
+      if (t > 0.80) t = 0.80
     } else {
       layer = 0
-      t = Math.max(p.light * (0.40 + 0.08 * fbm(lon * 2, lat * 2, seed + 2, 2)), polarFloor)
-      if (spec < 0.0035) {
-        layer = 2
-        t = 0.80
-      }
+      t = p.light * (0.36 + 0.06 * fbm(lon * 2, lat * 2, seed + 2, 2))
     }
   } else if (id === "moon") {
     var lib = Math.sin(timeMs / 22000) * 0.12
@@ -414,21 +456,19 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     var mare = hitList(lat, mlon, MARIA)
     var craters = craterField(lat, mlon, seed, 9, false)
     var high = fbm(mlon * 4, lat * 4, seed, 2)
-    t = p.light * ((mare ? 0.20 : 0.68) + 0.06 * high + craters.shade * 0.7 + craters.bright * 0.35)
-    if (!mare && craters.bright > 0.08) layer = 1
-    var tycho = angDist(lat, mlon, -0.72, -0.20)
-    if (tycho < 0.05) {
+    if (mare) {
+      layer = 2
+      t = p.light * (0.22 + 0.04 * high + craters.shade * 0.35)
+    } else {
+      t = p.light * (0.68 + 0.08 * high + craters.shade * 0.55 + craters.bright * 0.30)
+      if (craters.bright > 0.08) layer = 1
+    }
+    var tychoLat = -0.62
+    var tychoLon = -0.32
+    var tycho = angDist(lat, mlon, tychoLat, tychoLon)
+    if (tycho < 0.07) {
       layer = 1
-      t = p.light * 0.92
-    } else if (tycho < 0.48) {
-      var tang = Math.atan2(lat + 0.72, wrap(mlon + 0.20))
-      var ray = Math.abs(wrap(tang - 0.4))
-      var ray2 = Math.abs(wrap(tang - 2.2))
-      var ray3 = Math.abs(wrap(tang + 1.2))
-      if (ray < 0.08 || ray2 < 0.08 || ray3 < 0.08) {
-        layer = 1
-        t = Math.max(t, p.light * 0.78)
-      }
+      t = Math.min(0.90, Math.max(p.light * 1.0, 0.34))
     }
   } else if (id === "mars") {
     var dust = fbm(lon * 2.2, lat * 2.2, seed, 3)
@@ -540,19 +580,23 @@ function stampRings(grid, id, cols, rows, cx, cy, disk, aspect) {
 
 function prominence(sx, sy, timeMs) {
   var r = Math.sqrt(sx * sx + sy * sy)
-  if (r < 1.02 || r > 1.18) return false
+  if (r < 1.0 || r > 1.26) return false
   var ang = Math.atan2(sy, sx)
+  // Three arches, widely spaced, so they cannot merge into a corona blob.
+  // Thickness is about one cell at 37 and a connected bump at 21.
+  var bases = [-2.45, 0.20, 2.15]
   var k
-  for (k = 0; k < 4; k++) {
-    var base = -2.4 + k * 1.55 + Math.sin(timeMs / 15000 + k) * 0.12
+  for (k = 0; k < bases.length; k++) {
+    var base = bases[k] + Math.sin(timeMs / 22000 + k * 1.7) * 0.10
     var delta = Math.abs(wrap(ang - base))
-    if (delta > 0.30) continue
-    var arch = 1.035 + 0.09 * Math.sin((delta / 0.30) * Math.PI)
-    if (Math.abs(r - arch) < 0.030) return true
+    var half = 0.32
+    if (delta > half) continue
+    var lift = 0.13 + 0.02 * Math.sin(timeMs / 16000 + k)
+    var arch = 1.01 + lift * Math.cos(delta / half * Math.PI * 0.5)
+    if (Math.abs(r - arch) < 0.062) return true
   }
   return false
 }
-
 function spokeGlyph(theta) {
   var d = Math.abs(theta % Math.PI)
   if (d > Math.PI / 2) d = Math.PI - d
@@ -712,7 +756,7 @@ function frame(id, opts) {
       } else {
         painted = paintBody(chosen, sx, sy, col, row, spin, timeMs, seed)
         if (!painted && chosen === "sun" && prominence(sx, sy, timeMs)) {
-          painted = { ch: "+", layer: 2 }
+          painted = { ch: "+", layer: 1 }
         }
         if (!painted && paintAtmosphere(chosen, sx, sy)) painted = { ch: "·", layer: 1 }
       }

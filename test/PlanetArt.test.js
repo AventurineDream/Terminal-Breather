@@ -490,4 +490,143 @@ check(
   )
 );
 
+// --- Grok polish (Sun, Mercury, Venus, Earth, Moon) ---
+// Pins the features this pass made readable. Does not replace the
+// second-pass accent/continuity checks above.
+
+function southTaper(id, cells) {
+  const fig = Art.frame(id, { cells: cells, aspect: 0.5, timeMs: 0, fullness: 1 });
+  const rows = Art.composite(fig).split("\n");
+  const widths = rows.map((line) => {
+    let a = -1;
+    let b = -1;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] !== " ") {
+        if (a < 0) a = i;
+        b = i;
+      }
+    }
+    return b < 0 ? 0 : b - a + 1;
+  });
+  const ink = [];
+  widths.forEach((v, i) => {
+    if (v) ink.push([i, v]);
+  });
+  const mid = ink[Math.floor(ink.length / 2)][0];
+  for (let k = 1; k < ink.length; k++) {
+    if (ink[k][0] !== ink[k - 1][0] + 1) return false;
+    if (ink[k][0] > mid && ink[k][1] > ink[k - 1][1] + 1) return false;
+  }
+  return ink.length > 4;
+}
+
+check(
+  "grok: sun has no @ blob at 21/37/45",
+  [21, 37, 45].every(
+    (cells) => !Art.composite(Art.frame("sun", { cells: cells, aspect: 0.5, timeMs: 0, fullness: 1 })).includes("@")
+  )
+);
+check(
+  "grok: sun prominences attach at the limb and do not form a corona blob",
+  (() => {
+    function promo(cells) {
+      const fig = Art.frame("sun", { cells: cells, aspect: 0.5, timeMs: 0, fullness: 1 });
+      const rows = fig.layers[1].text.split("\n");
+      const cx = (fig.cols - 1) / 2;
+      const cy = (fig.rows - 1) / 2;
+      let n = 0;
+      let minR = 9;
+      let maxR = 0;
+      for (let r = 0; r < fig.rows; r++) {
+        for (let c = 0; c < fig.cols; c++) {
+          if (rows[r][c] === " ") continue;
+          const sx = ((c - cx) * fig.aspect) / fig.disk;
+          const sy = (cy - r) / fig.disk;
+          const rr = Math.sqrt(sx * sx + sy * sy);
+          if (rr <= 1.02) continue;
+          n++;
+          if (rr < minR) minR = rr;
+          if (rr > maxR) maxR = rr;
+        }
+      }
+      return n >= (cells < 30 ? 12 : 40) && n <= (cells < 30 ? 90 : 180) && minR < 1.08 && maxR < 1.28;
+    }
+    return promo(21) && promo(37);
+  })()
+);
+check(
+  "grok: mercury shows crater floors and rims at 21 and 37",
+  [21, 37].every((cells) => {
+    const c = layerCounts(Art.frame("mercury", { cells: cells, aspect: 0.5, timeMs: 0, fullness: 1 }));
+    return c[1] >= 20 && c[2] >= 15;
+  })
+);
+check(
+  "grok: venus chevron opens into the lit half and has both arms",
+  (() => {
+    const fig = Art.frame("venus", { cells: 37, aspect: 0.5, timeMs: 0, fullness: 1 });
+    const rows = fig.layers[2].text.split("\n");
+    const cx = (fig.cols - 1) / 2;
+    const cy = (fig.rows - 1) / 2;
+    let n = 0;
+    let sx = 0;
+    let above = 0;
+    let below = 0;
+    for (let r = 0; r < fig.rows; r++) {
+      for (let c = 0; c < fig.cols; c++) {
+        if (rows[r][c] === " ") continue;
+        n++;
+        sx += c;
+        if (r < cy - 1) above++;
+        if (r > cy + 1) below++;
+      }
+    }
+    return n >= 40 && sx / n < cx - 4 && above >= 15 && below >= 15;
+  })()
+);
+check(
+  "grok: earth south limb tapers with no detached arc at 21 and 37",
+  [21, 37].every((cells) => southTaper("earth", cells))
+);
+check(
+  "grok: earth near side has two landmasses and no specular @",
+  (() => {
+    const fig = Art.frame("earth", { cells: 37, aspect: 0.5, timeMs: 0, fullness: 1 });
+    if (Art.composite(fig).includes("@")) return false;
+    const land = fig.layers[1].text.split("\n");
+    let split = 0;
+    for (let r = Math.floor(fig.rows * 0.35); r < Math.floor(fig.rows * 0.7); r++) {
+      let runs = 0;
+      let on = false;
+      for (let c = 0; c < land[r].length; c++) {
+        const ink = land[r][c] !== " ";
+        if (ink && !on) runs++;
+        on = ink;
+      }
+      if (runs >= 2) split++;
+    }
+    return split >= 4;
+  })()
+);
+check(
+  "grok: earth far side keeps land, not a blank ocean",
+  layerCounts(Art.frame("earth", { cells: 37, aspect: 0.5, timeMs: 26000, fullness: 1 }))[1] >= 40
+);
+check(
+  "grok: earth cloud deck is on the near-side ocean",
+  (() => {
+    const fig = Art.frame("earth", { cells: 37, aspect: 0.5, timeMs: 0, fullness: 1 });
+    const rows = fig.layers[2].text.split("\n");
+    let n = 0;
+    const a = Math.floor(rows.length * 0.25);
+    const b = Math.floor(rows.length * 0.75);
+    for (let r = a; r < b; r++) n += rows[r].replace(/ /g, "").length;
+    return n >= 20;
+  })()
+);
+check(
+  "grok: moon maria sit on the dark layer",
+  layerCounts(Art.frame("moon", { cells: 37, aspect: 0.5, timeMs: 0, fullness: 1 }))[2] >= 80
+);
+
 console.log(`PlanetArt tests: ${pass} passed${process.exitCode ? " (WITH FAILURES)" : ""}`);
