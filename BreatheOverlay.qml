@@ -96,6 +96,11 @@ Item {
   readonly property color dim: Qt.darker(foreground, 1.55)
 
   function open(payloadJson) {
+    // A summon (or Begin) while a session is already open is ignored:
+    // re-running startSession would reset startedAt, and the figure's
+    // breath scale would pop back to 0.42 in one frame. End the session
+    // (Esc/Q) first, then summon again.
+    if (root.opened) return
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     root.pendingStart = payload
@@ -204,7 +209,7 @@ Item {
   }
 
   Timer {
-    interval: 50
+    interval: 25
     running: root.opened && root.startedAt > 0
     repeat: true
     onTriggered: {
@@ -251,7 +256,11 @@ Item {
         ? Art.frame(root.figureId, {
             maxCells: figureRows,
             aspect: figureAspect,
-            timeMs: root.elapsedSecs * 1000,
+            // The texture clock (spin, clouds, stipple) advances in 100 ms
+            // steps; the breath clock (fullness) stays per-tick. Identical
+            // grid text is not re-rastered, so holds stop re-rendering
+            // every tick and the hold shimmer roughly halves.
+            timeMs: Math.floor(root.elapsedSecs * 10) * 100,
             fullness: root.breath.fullness
           })
         : Art.emptyFrame()
@@ -259,9 +268,26 @@ Item {
         var adv = figureMetric.implicitWidth / 20
         var line = figureMetric.implicitHeight / 20
         if (!(adv > 0) || !(line > 0)) return 12
-        var need = Math.max(figure.cols * adv, figure.rows * line)
+        // Ringed planets (Saturn, Uranus) are fit by disk diameter, not by
+        // grid extent: their grids are inflated by ring reach, so fitting
+        // by extent shrinks the disk to ~half the stage. The disk fills
+        // the stage and only the thin rings extend past it, horizontally.
+        var need
+        if ((root.figureId === "saturn" || root.figureId === "uranus") && figure.disk > 0) {
+          need = 2 * figure.disk * line
+        } else {
+          need = Math.max(figure.cols * adv, figure.rows * line)
+        }
         return Math.max(8, circleMax / Math.max(1, need))
       }
+      // Safety cap: on tiny screens the 8 px font floor can lift a figure
+      // past its stage; shrink the whole figure (and the guide ring) back
+      // inside. Ringed planets are exempt — their font is fit by disk, so
+      // the rings intentionally extend past the stage horizontally.
+      readonly property real figureFit: (root.figureId === "saturn" || root.figureId === "uranus")
+        ? 1
+        : Math.min(1, circleMax / Math.max(1, figure.cols * figureAdvance),
+                      circleMax / Math.max(1, figure.rows * figureLine))
       readonly property real figureAdvance: figureMetric.implicitWidth / 20 * figureFontPx
       readonly property real figureLine: figureMetric.implicitHeight / 20 * figureFontPx
 
@@ -308,7 +334,7 @@ Item {
 
           Rectangle {
             anchors.centerIn: parent
-            width: Math.max(1, panel.figure.disk * 2 * panel.figureLine)
+            width: Math.max(1, panel.figure.disk * 2 * panel.figureLine * panel.figureFit)
             height: width
             radius: width / 2
             color: "transparent"
@@ -321,7 +347,10 @@ Item {
             anchors.centerIn: parent
             width: panel.figure.cols * panel.figureAdvance
             height: panel.figure.rows * panel.figureLine
-            scale: panel.figure.scale > 0 ? panel.figure.scale : 1
+            scale: (panel.figure.scale > 0 ? panel.figure.scale : 1) * panel.figureFit
+            // Glide between ticks so fast patterns (Breath of Fire) grow
+            // continuously instead of stepping once per tick.
+            Behavior on scale { NumberAnimation { duration: 25 } }
 
             Text {
               anchors.fill: parent
