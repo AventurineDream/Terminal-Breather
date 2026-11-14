@@ -108,6 +108,15 @@ node test/PlanetArt.test.js
 
 The QML layer (FileView timing, panel wiring) is reviewed by diff and verified on a live Omarchy shell.
 
+Mandala contours use cell-width feathering; Iris, Petal, and Lattice rotate slowly without resetting at breath boundaries. Orbits projects its seven moon centres once per frame. The mirrored figures share mirrored stipple coordinates, so glyphs and colour layers—not just silhouettes—are symmetric.
+
+Before/after mandala captures at 80×24, 120×40, and 200×60 are in `renders/gpt/` (21, 37, and 45 figure rows, aspect 0.5). Reproduce text and colour sheets with Node and `rsvg-convert`:
+
+```bash
+node renders/gpt/render.cjs before
+node renders/gpt/render.cjs after --view
+```
+
 ## License
 
 MIT

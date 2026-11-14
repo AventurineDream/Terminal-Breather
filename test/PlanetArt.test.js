@@ -490,4 +490,171 @@ check(
   )
 );
 
+// --- GPT mandala polish: visible geometry, not implementation snapshots ---
+const POLISH_SIZES = [21, 37, 45];
+const POLISH_ASPECTS = [0.46, 0.5, 0.6];
+function reflectGlyph(ch) {
+  return ch === "/" ? "\\" : ch === "\\" ? "/" : ch;
+}
+function symmetricLayers(fig, halfTurn) {
+  return fig.layers.every((layer) => {
+    const rows = layer.text.split("\n");
+    for (let r = 0; r < fig.rows; r++) {
+      for (let c = 0; c < fig.cols; c++) {
+        const ch = rows[r][c];
+        if (halfTurn) {
+          if (ch !== rows[fig.rows - 1 - r][fig.cols - 1 - c]) return false;
+        } else {
+          if (ch !== reflectGlyph(rows[r][fig.cols - 1 - c]) ||
+              ch !== reflectGlyph(rows[fig.rows - 1 - r][c])) return false;
+        }
+      }
+    }
+    return true;
+  });
+}
+function components(rows) {
+  const seen = new Set(), result = [];
+  const height = rows.length, width = rows[0].length;
+  for (let r = 0; r < height; r++) for (let c = 0; c < width; c++) {
+    const key = r * width + c;
+    if (rows[r][c] === " " || seen.has(key)) continue;
+    const queue = [[r, c]];
+    seen.add(key);
+    for (let i = 0; i < queue.length; i++) {
+      const [y, x] = queue[i];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const yy = y + dy, xx = x + dx, k = yy * width + xx;
+        if (yy < 0 || yy >= height || xx < 0 || xx >= width ||
+            rows[yy][xx] === " " || seen.has(k)) continue;
+        seen.add(k);
+        queue.push([yy, xx]);
+      }
+    }
+    result.push(queue);
+  }
+  return result;
+}
+for (const id of ["iris", "petal", "lattice"]) {
+  check(`${id}: exact mirrored glyphs and layers at rest, including directional strokes`,
+    POLISH_SIZES.every(cells => POLISH_ASPECTS.every(aspect =>
+      [0, 0.6, 1].every(fullness =>
+        symmetricLayers(Art.frame(id, { cells, aspect, fullness }), false)))));
+  check(`${id}: exact half-turn symmetry while rotating`,
+    POLISH_SIZES.every(cells =>
+      [1300, 12000, 47900, 48000, 48100].every(timeMs =>
+        symmetricLayers(Art.frame(id, { cells, timeMs, fullness: 0.6 }), true))));
+}
+check("petal: eight broad petals with open valleys, not eight thin spikes",
+  POLISH_SIZES.every(cells => {
+    const fig = Art.frame("petal", { cells, fullness: 0.6 });
+    const rows = grid(fig), cx = (fig.cols - 1) / 2, cy = (fig.rows - 1) / 2;
+    function at(x, y) {
+      return cell(rows, Math.round(cx + x * fig.disk / fig.aspect), Math.round(cy - y * fig.disk));
+    }
+    for (let k = 0; k < 8; k++) {
+      const a = k * Math.PI / 4;
+      for (const side of [-0.08, 0.08]) {
+        if (at(0.50 * Math.cos(a) - side * Math.sin(a),
+               0.50 * Math.sin(a) + side * Math.cos(a)) === " ") return false;
+      }
+      const valley = a + Math.PI / 8;
+      if (at(0.72 * Math.cos(valley), 0.72 * Math.sin(valley)) !== " ") return false;
+    }
+    return true;
+  }));
+check("petal: no detached petal tips at any supported terminal size",
+  POLISH_SIZES.every(cells => [0, 3000, 12000, 24000].every(timeMs =>
+    components(grid(Art.frame("petal", { cells, timeMs }))).length === 1)));
+check("orbits: three connected tracks with their moons, plus the separate hub",
+  POLISH_SIZES.every(cells => POLISH_ASPECTS.every(aspect =>
+    [0, 12000].every(timeMs => {
+      const fig = Art.frame("orbits", { cells, aspect, timeMs });
+      // A moon replaces its track cell in the final layered grid.
+      return components(grid(fig)).length === 4;
+    }))));
+function moonCenters(fig) {
+  const rows = fig.layers[2].text.split("\n"), out = [];
+  for (let r = 0; r < fig.rows; r++) for (let c = 0; c < fig.cols; c++)
+    if (rows[r][c] === "o") out.push([c, r]);
+  return out;
+}
+check("orbits: exactly seven distinct moons stay on the 1/2/4 tracks throughout motion",
+  POLISH_SIZES.every(cells => POLISH_ASPECTS.every(aspect => {
+    for (let timeMs = 0; timeMs <= 120000; timeMs += 1000) {
+      const fig = Art.frame("orbits", { cells, aspect, timeMs });
+      const centers = moonCenters(fig), counts = [0, 0, 0];
+      if (centers.length !== 7) return false;
+      for (const [c, r] of centers) {
+        const radius = Math.hypot((c - (fig.cols - 1) / 2) * aspect, r - (fig.rows - 1) / 2) / fig.disk;
+        const k = radius < 0.41 ? 0 : radius < 0.68 ? 1 : 2;
+        if (Math.abs(radius - [0.28, 0.54, 0.82][k]) > Math.hypot(aspect, 1) / (2 * fig.disk)) return false;
+        counts[k]++;
+      }
+      if (counts.join() !== "1,2,4") return false;
+    }
+    return true;
+  })));
+check("orbits: moons move at most one cell per texture tick, including the 48s clock boundary",
+  POLISH_SIZES.every(cells => {
+    let previous;
+    for (let timeMs = 47000; timeMs <= 49000; timeMs += 100) {
+      const centers = moonCenters(Art.frame("orbits", { cells, timeMs }));
+      if (previous && !centers.every(([c, r]) =>
+        previous.some(([x, y]) => Math.abs(c - x) <= 1 && Math.abs(r - y) <= 1))) return false;
+      previous = centers;
+    }
+    return true;
+  }));
+check("lattice: four rings and twelve spokes form one connected wheel",
+  POLISH_SIZES.every(cells => POLISH_ASPECTS.every(aspect =>
+    [0, 12000].every(timeMs =>
+      components(grid(Art.frame("lattice", { cells, aspect, timeMs }))).length === 1))));
+check("lattice: rotating stroke glyphs follow the screen-space spoke direction",
+  [0, 12000, 24000, 47900].every(timeMs => {
+    const fig = Art.frame("lattice", { cells: 45, timeMs }), rows = grid(fig);
+    for (let r = 0; r < fig.rows; r++) for (let c = 0; c < fig.cols; c++) {
+      const x = (c - (fig.cols - 1) / 2) * fig.aspect, y = (fig.rows - 1) / 2 - r;
+      if (Math.hypot(x, y) < fig.disk * 0.35) continue;
+      const ch = rows[r][c], angle = Math.atan2(Math.abs(y), Math.abs(x)) * 180 / Math.PI;
+      if ((ch === "-" && angle > 25) || (ch === "|" && angle < 65) ||
+          (ch === "/" && x * y <= 0) || (ch === "\\" && x * y >= 0)) return false;
+    }
+    return true;
+  }));
+
+check("mandalas: no texture jumps or restarts at holds and clock boundaries",
+  MANDALAS.every(id => POLISH_SIZES.every(cells => {
+    for (const fullness of [0, 0.6, 1]) {
+      let previous;
+      for (let timeMs = 47000; timeMs <= 49000; timeMs += 100) {
+        const fig = Art.frame(id, { cells, timeMs, fullness });
+        const text = Art.composite(fig);
+        if (previous) {
+          let changed = 0;
+          for (let i = 0; i < text.length; i++) changed += text[i] !== previous[i];
+          if (changed / (fig.cols * fig.rows) >= 0.04) return false;
+        }
+        previous = text;
+      }
+    }
+    return true;
+  })));
+check("mandalas: a coherent breath changes under 8% of glyphs per 100ms, without resetting rotation",
+  MANDALAS.every(id => {
+    let previous;
+    for (let timeMs = 0; timeMs <= 22000; timeMs += 100) {
+      const fullness = 0.5 - 0.5 * Math.cos(timeMs * Math.PI / 5500);
+      const fig = Art.frame(id, { cells: 21, timeMs, fullness });
+      const text = Art.composite(fig);
+      if (previous) {
+        let changed = 0;
+        for (let i = 0; i < text.length; i++) changed += text[i] !== previous[i];
+        if (changed / (fig.cols * fig.rows) >= 0.08) return false;
+      }
+      previous = text;
+    }
+    return true;
+  }));
+
 console.log(`PlanetArt tests: ${pass} passed${process.exitCode ? " (WITH FAILURES)" : ""}`);

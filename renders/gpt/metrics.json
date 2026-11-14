@@ -1,0 +1,234 @@
+{
+  "node": "v26.13.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "base": "ec9fa05",
+  "benchmark": "frame only, 45 rows; 100 warmup + median of five batches of 200 frames",
+  "figures": {
+    "iris": {
+      "before": {
+        "medianFrameMs": 0.264281885,
+        "samplesMs": [
+          0.25933773000000004,
+          0.26350126,
+          0.264281885,
+          0.26493625499999995,
+          0.27155186
+        ],
+        "maxGlyphChange": 0.09523809523809523,
+        "maxLayerChange": 0.17421602787456447,
+        "minGoldMoons": 0,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 446
+          },
+          {
+            "terminal": "120x40",
+            "count": 1454
+          },
+          {
+            "terminal": "200x60",
+            "count": 2162
+          }
+        ]
+      },
+      "after": {
+        "medianFrameMs": 0.306159775,
+        "samplesMs": [
+          0.30432353500000003,
+          0.30451019999999995,
+          0.306159775,
+          0.30871164500000003,
+          0.311953295
+        ],
+        "maxGlyphChange": 0.05574912891986063,
+        "maxLayerChange": 0.07665505226480836,
+        "minGoldMoons": 0,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 534
+          },
+          {
+            "terminal": "120x40",
+            "count": 1588
+          },
+          {
+            "terminal": "200x60",
+            "count": 2346
+          }
+        ]
+      }
+    },
+    "orbits": {
+      "before": {
+        "medianFrameMs": 0.6636298050000005,
+        "samplesMs": [
+          0.593097734999999,
+          0.6607685649999985,
+          0.6636298050000005,
+          0.6795091300000012,
+          0.6888836850000007
+        ],
+        "maxGlyphChange": 0.013937282229965157,
+        "maxLayerChange": 0.023228803716608595,
+        "minGoldMoons": 0,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 118
+          },
+          {
+            "terminal": "120x40",
+            "count": 321
+          },
+          {
+            "terminal": "200x60",
+            "count": 509
+          }
+        ]
+      },
+      "after": {
+        "medianFrameMs": 0.20383603000000222,
+        "samplesMs": [
+          0.2026135350000004,
+          0.20373665999999957,
+          0.20383603000000222,
+          0.2042891550000013,
+          0.21740890500000204
+        ],
+        "maxGlyphChange": 0.011614401858304297,
+        "maxLayerChange": 0.023228803716608595,
+        "minGoldMoons": 7,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 217
+          },
+          {
+            "terminal": "120x40",
+            "count": 531
+          },
+          {
+            "terminal": "200x60",
+            "count": 719
+          }
+        ]
+      }
+    },
+    "petal": {
+      "before": {
+        "medianFrameMs": 0.3423816399999987,
+        "samplesMs": [
+          0.33817249000000177,
+          0.3397510250000005,
+          0.3423816399999987,
+          0.3445853850000003,
+          0.3477228699999978
+        ],
+        "maxGlyphChange": 0.07897793263646923,
+        "maxLayerChange": 0.1440185830429733,
+        "minGoldMoons": 0,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 127
+          },
+          {
+            "terminal": "120x40",
+            "count": 367
+          },
+          {
+            "terminal": "200x60",
+            "count": 593
+          }
+        ]
+      },
+      "after": {
+        "medianFrameMs": 0.43060178000000177,
+        "samplesMs": [
+          0.42694074999999887,
+          0.4304157400000031,
+          0.43060178000000177,
+          0.437192799999998,
+          0.4482344349999994
+        ],
+        "maxGlyphChange": 0.03948896631823461,
+        "maxLayerChange": 0.06039488966318235,
+        "minGoldMoons": 0,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 315
+          },
+          {
+            "terminal": "120x40",
+            "count": 939
+          },
+          {
+            "terminal": "200x60",
+            "count": 1395
+          }
+        ]
+      }
+    },
+    "lattice": {
+      "before": {
+        "medianFrameMs": 0.30150510000000397,
+        "samplesMs": [
+          0.29989573500000005,
+          0.30073864500000125,
+          0.30150510000000397,
+          0.3025363500000003,
+          0.3029384300000038
+        ],
+        "maxGlyphChange": 0.053426248548199766,
+        "maxLayerChange": 0.06504065040650407,
+        "minGoldMoons": 2,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 173
+          },
+          {
+            "terminal": "120x40",
+            "count": 509
+          },
+          {
+            "terminal": "200x60",
+            "count": 777
+          }
+        ]
+      },
+      "after": {
+        "medianFrameMs": 0.2964098100000001,
+        "samplesMs": [
+          0.2953006449999998,
+          0.296118355000001,
+          0.2964098100000001,
+          0.29696355500000093,
+          0.297401890000001
+        ],
+        "maxGlyphChange": 0.025551684088269456,
+        "maxLayerChange": 0.032520325203252036,
+        "minGoldMoons": 2,
+        "inkCells": [
+          {
+            "terminal": "80x24",
+            "count": 359
+          },
+          {
+            "terminal": "120x40",
+            "count": 861
+          },
+          {
+            "terminal": "200x60",
+            "count": 1191
+          }
+        ]
+      }
+    }
+  },
+  "unassignedBodiesByteIdentical": true
+}

@@ -565,72 +565,88 @@ function spokeGlyph(theta) {
   return "\\"
 }
 
-function paintMandala(id, sx, sy, col, row, spin, fullness) {
+// Feather widths are in figure coordinates, so contours stay legible from
+// 21 to 45 rows without changing the geometry as the breath moves.
+function paintMandala(id, sx, sy, col, row, spin, fullness, feather) {
   var r = Math.sqrt(sx * sx + sy * sy)
-  var theta = Math.atan2(sy, sx) + spin
+  if (r > 1.02) return null
+  var theta
+  var coverage
+  var tone
   if (id === "iris") {
-    var pupil = 0.07 + 0.44 * clamp01(fullness)
-    if (r > 0.98 || r < pupil) return null
-    if (r > 0.90) return { ch: "+", layer: 1 }
-    var sector = Math.PI / 4
-    var a = theta % sector
-    if (a < 0) a += sector
-    var edge = Math.min(a, sector - a)
-    if (r > pupil + 0.08 && edge < 0.032) return null
-    if (r < pupil + 0.04 || a < 0.09) return { ch: "+", layer: 2 }
-    return { ch: ":", layer: 0 }
+    var pupil = 0.07 + 0.44 * fullness
+    coverage = clamp01((r - pupil) / feather + 0.5) *
+      clamp01((0.98 - r) / feather + 0.5)
+    if (coverage === 0) return null
+    if (r > 0.90) return ink(0.44 * coverage, col, row, 1)
+    if (r < pupil + 0.055) return ink(0.45 * coverage, col, row, 2)
+    // Eight paired blade edges: no one-sided seam, no asymmetric stipple.
+    theta = Math.atan2(sy, sx) + spin
+    var seam = Math.abs(Math.sin(4 * theta)) * r / 4
+    tone = 0.27 + 0.05 * (0.90 - r) / (0.90 - pupil)
+    tone += 0.10 * clamp01(1 - Math.abs(seam - 0.055) / 0.035)
+    tone *= 0.35 + 0.65 * clamp01((seam - 0.018) / feather + 0.5)
+    return ink(tone * coverage, col, row, 0)
   }
   if (id === "orbits") {
-    var rings = [0.28, 0.54, 0.82]
-    var moons = [1, 2, 4]
-    var speeds = [1.1, 0.62, 0.34]
-    var k
-    for (k = 0; k < rings.length; k++) {
-      var m
-      for (m = 0; m < moons[k]; m++) {
-        var ang = spin * speeds[k] + m * (Math.PI * 2 / moons[k])
-        var mx = Math.cos(ang) * rings[k]
-        var my = Math.sin(ang) * rings[k]
-        var md = Math.sqrt((sx - mx) * (sx - mx) + (sy - my) * (sy - my))
-        if (md < 0.055) return { ch: md < 0.028 ? "o" : "+", layer: 2 }
-      }
-      if (Math.abs(r - rings[k]) < 0.026) return { ch: "·", layer: 1 }
-    }
+    var trackDist = Math.min(Math.abs(r - 0.28), Math.abs(r - 0.54), Math.abs(r - 0.82))
+    coverage = clamp01((0.026 + feather - trackDist) / feather)
+    if (coverage > 0) return ink(0.14 * coverage, col, row, 1)
     if (r < 0.06) return { ch: "+", layer: 0 }
     return null
   }
+  theta = Math.atan2(sy, sx) + spin
   if (id === "petal") {
-    var fold = Math.cos(8 * theta)
-    var lobe = 0.20 + 0.68 * Math.pow(Math.max(0, fold), 1.5)
-    if (fold < 0.15 && r > 0.22) return null
-    if (r > lobe || r > 0.96) return null
-    if (r < 0.08) return { ch: "+", layer: 2 }
-    if (lobe - r < 0.03) return { ch: "+", layer: 1 }
-    var step = Math.PI / 4
-    var center = Math.round(theta / step) * step
-    if (Math.abs(wrap(theta - center)) < 0.045 && r > 0.18) return { ch: "+", layer: 2 }
-    return { ch: ":", layer: 0 }
+    // A union of eight rounded ellipses, not eight pointed radial spikes.
+    var angle = Math.acos(Math.max(-1, Math.min(1, Math.cos(8 * theta)))) / 8
+    var along = (r * Math.cos(angle) - 0.49) / 0.40
+    var across = r * Math.sin(angle) / 0.155
+    var ellipseField = along * along + across * across
+    var gradient = 2 * Math.sqrt(along * along / 0.16 + across * across / 0.024025)
+    var edgeDist = (1 - ellipseField) / Math.max(gradient, 0.001)
+    // The small round hub joins all eight roots at every grid size.
+    edgeDist = Math.max(edgeDist, 0.18 - r)
+    coverage = clamp01(edgeDist / feather + 0.5)
+    if (coverage === 0) return null
+    if (r < 0.10) return ink(0.58 * coverage, col, row, 2)
+    if (edgeDist < 0.025) return ink(0.48 * coverage, col, row, 1)
+    var rib = clamp01(1 - r * Math.sin(angle) / (0.016 + feather))
+    return ink((0.28 + 0.20 * rib) * coverage, col, row, rib > 0.75 ? 2 : 0)
   }
   var spokeStep = Math.PI * 2 / 12
-  var spokeN = Math.round(theta / spokeStep)
-  var spokeAngle = spokeN * spokeStep
-  var delta = Math.abs(wrap(theta - spokeAngle))
-  var onSpoke = delta * Math.max(r, 0.10) < 0.026 && r < 0.92 && r > 0.08
-  var ringsAt = [0.22 + 0.04 * clamp01(fullness), 0.44, 0.66, 0.86]
-  var onRing = false
-  var ringDist = 1
-  var q
-  for (q = 0; q < ringsAt.length; q++) {
-    var rd = Math.abs(r - ringsAt[q])
-    if (rd < ringDist) ringDist = rd
-    if (rd < 0.016) onRing = true
-  }
-  if (r > 0.96) return null
+  var spokeAngle = Math.round(theta / spokeStep) * spokeStep
+  var spokeDist = Math.abs(Math.sin(theta - spokeAngle)) * r
+  var spokeInk = clamp01((0.020 + feather - spokeDist) / feather)
+  var ringDist = Math.min(Math.abs(r - (0.22 + 0.04 * fullness)),
+    Math.abs(r - 0.44), Math.abs(r - 0.66), Math.abs(r - 0.86))
+  var ringInk = clamp01((0.016 + feather - ringDist) / feather)
+  if (r > 0.94) return null
   if (r < 0.05) return { ch: "+", layer: 2 }
-  if (onSpoke && onRing && delta * Math.max(r, 0.10) < 0.020 && ringDist < 0.014) return { ch: "o", layer: 2 }
-  if (onSpoke) return { ch: spokeGlyph(spokeAngle), layer: 0 }
-  if (onRing) return { ch: "·", layer: 1 }
+  if (spokeInk > 0.95 && ringInk > 0.95) return { ch: "o", layer: 2 }
+  if (ringInk > 0.30) return ink(0.14 * ringInk, col, row, 1)
+  if (spokeInk > 0.30 && r < 0.92 && r > 0.05) {
+    // Convert the rotating figure-space spoke back to its screen angle.
+    return { ch: spokeInk > 0.65 ? spokeGlyph(spokeAngle - spin) : "·", layer: 0 }
+  }
   return null
+}
+
+function stampOrbitMoons(grid, cols, rows, cx, cy, disk, aspect, spin) {
+  // Project each centre once, after the tracks. Per-cell hit tests could
+  // miss a moon between rows, and repeated seven trigonometric pairs per cell.
+  var k
+  var m
+  for (k = 0; k < 3; k++) {
+    var radius = k === 0 ? 0.28 : k === 1 ? 0.54 : 0.82
+    var speed = k === 0 ? 1.1 : k === 1 ? 0.62 : 0.34
+    var count = 1 << k
+    for (m = 0; m < count; m++) {
+      var angle = spin * speed + m * Math.PI * 2 / count
+      var col = Math.round(cx + Math.cos(angle) * radius * disk / aspect)
+      var row = Math.round(cy - Math.sin(angle) * radius * disk)
+      stampAt(grid, cols, rows, col, row, "o", 2)
+    }
+  }
 }
 
 function oddCount(v) {
@@ -696,10 +712,14 @@ function frame(id, opts) {
   var timeMs = opts.timeMs || 0
   var fullness = clamp01(opts.fullness == null ? 1 : opts.fullness)
   var spin = spinOf(chosen, timeMs)
+  // Slow the repeated eight-/twelve-fold texture, not the breath clock.
+  // Keep the orbital rates, and never wrap a clock at a breath boundary.
+  if (spec.kind === "mandala" && chosen !== "orbits") spin *= 0.25
   var seed = idSeed(chosen)
   var grid = blank(cols, rows)
   var cx = (cols - 1) / 2
   var cy = (rows - 1) / 2
+  var feather = 0.5 / disk
   var row
   var col
   for (row = 0; row < rows; row++) {
@@ -708,7 +728,8 @@ function frame(id, opts) {
       var sy = (cy - row) / disk
       var painted = null
       if (spec.kind === "mandala") {
-        painted = paintMandala(chosen, sx, sy, col, row, spin, fullness)
+        painted = paintMandala(chosen, sx, sy, Math.abs(col - cx), Math.abs(row - cy),
+          spin, fullness, feather)
       } else {
         painted = paintBody(chosen, sx, sy, col, row, spin, timeMs, seed)
         if (!painted && chosen === "sun" && prominence(sx, sy, timeMs)) {
@@ -720,6 +741,7 @@ function frame(id, opts) {
     }
   }
   if (chosen === "saturn" || chosen === "uranus") stampRings(grid, chosen, cols, rows, cx, cy, disk, aspect)
+  if (chosen === "orbits") stampOrbitMoons(grid, cols, rows, cx, cy, disk, aspect, spin)
   return {
     id: chosen,
     name: spec.name,
