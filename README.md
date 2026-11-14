@@ -86,6 +86,38 @@ omarchy-shell luotao.zen status        # {"streakDays":3,"todayMinutes":15,...}
 
 Pattern and length chosen in the panel are written back to `shell.json`, so your last choice is the default next time.
 
+### Terminal shortcut (`tb`)
+
+A one-word launcher for the terminal — handy over SSH, where the
+fullscreen overlay opens on the machine's own displays and you cannot
+see it from the phone. Install it once:
+
+```bash
+cp cli/tb cli/tb-guide ~/.local/bin/
+chmod +x ~/.local/bin/tb ~/.local/bin/tb-guide
+```
+
+Then type `tb` and press Enter. It uses your saved defaults (pattern
+and minutes from `shell.json`); override them the same way as the
+other commands:
+
+```bash
+tb          # saved defaults
+tb 478      # 4-7-8 breathing, saved minutes
+tb 478 10   # 4-7-8 breathing, 10 minutes
+```
+
+Where the session shows up depends on how you are connected. On the
+machine itself it summons the fullscreen overlay. Over SSH (Termius
+or any SSH app on a phone) it runs a breathing guide right in the
+terminal instead — a circle that grows as you breathe in, holds, and
+shrinks as you breathe out, coloured by phase, with the phase name and
+countdown riding along — the same patterns and timings as the overlay,
+including your custom patterns from `patterns.json`. `Ctrl+C` ends it
+early; sessions under a minute are not logged, same as the overlay.
+`tb --gui` forces the overlay and `tb --term` forces the terminal
+guide, whichever way you are connected.
+
 ### Settings
 
 The panel has a collapsible **Settings** section (below the figure picker): a picker for the 14 figures plus Random, bell and do-not-disturb toggles, and a field for the meditation-log path (empty = the vault default). Every change is written back to `shell.json`, so it is the default from then on. The same settings are also available from the command line:
@@ -119,6 +151,7 @@ The pure model (`ZenModel.js`) and the figure renderer (`PlanetArt.js`) are cove
 ```bash
 node test/ZenModel.test.js
 node test/PlanetArt.test.js
+python3 test/tb-guide.test.py
 ```
 
 The QML layer (FileView timing, panel wiring) is reviewed by diff and verified on a live Omarchy shell.
