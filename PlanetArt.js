@@ -88,7 +88,9 @@ var MARIA = [
 ]
 
 function clamp01(v) {
-  if (v < 0) return 0
+  // NaN (and anything else that is not >= 0) clamps to 0 instead of
+  // passing through — a NaN scale would break the overlay's QML scale.
+  if (!(v >= 0)) return 0
   if (v > 1) return 1
   return v
 }
@@ -679,11 +681,13 @@ function visualScale(fullness) {
 
 function frame(id, opts) {
   opts = opts || {}
-  var chosen = BY_ID[id] ? id : "earth"
+  var key = String(id || "").toLowerCase()
+  var chosen = BY_ID[key] ? key : "earth"
   var spec = BY_ID[chosen]
   var n = opts.cells || opts.maxCells || maxCells(opts.stagePx)
   if (n % 2 === 0) n -= 1
   if (n < 15) n = 15
+  if (n > 45) n = 45
   var aspect = opts.aspect > 0.3 && opts.aspect < 0.85 ? opts.aspect : 0.5
   var g = gridSpec(chosen, n, aspect)
   var cols = g.cols
@@ -743,10 +747,11 @@ function emptyFrame() {
 }
 
 function animation(id) {
-  if (id === "random" || id === "" || id == null) {
+  var key = String(id == null ? "" : id).toLowerCase()
+  if (key === "random" || key === "") {
     return { id: "random", name: "Random", kind: "choice", hint: "a different figure each session" }
   }
-  return BY_ID[String(id).toLowerCase()] || null
+  return BY_ID[key] || null
 }
 
 function ids() {

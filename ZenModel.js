@@ -194,7 +194,7 @@ function breathAt(pat, t) {
 function parseStats(raw) {
   try {
     var parsed = JSON.parse(raw || "{}")
-    if (parsed && typeof parsed.days === "object" && parsed.days !== null) return { days: parsed.days }
+    if (parsed && typeof parsed.days === "object" && parsed.days !== null && !Array.isArray(parsed.days)) return { days: parsed.days }
   } catch (e) {}
   return { days: {} }
 }
@@ -202,7 +202,10 @@ function parseStats(raw) {
 function addMinutes(stats, dayKey, minutes) {
   var days = {}
   for (var k in stats.days) days[k] = stats.days[k]
-  days[dayKey] = Math.round((Number(days[dayKey]) || 0) + minutes)
+  // Non-finite or negative minutes add nothing: a NaN stored here would
+  // serialize to null in JSON, and a negative would subtract practice time.
+  var m = isFinite(minutes) && minutes >= 0 ? minutes : 0
+  days[dayKey] = Math.round((Number(days[dayKey]) || 0) + m)
   return { days: days }
 }
 
