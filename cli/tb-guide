@@ -9,22 +9,30 @@ The guide draws a circle that grows as you breathe in, holds, and
 shrinks as you breathe out — the same idea as the overlay's figure that
 scales with the breath — with a colour that shifts by phase.
 
+Sessions that reach at least one minute are logged exactly the way the
+overlay logs them: minutes added to today's entry in
+~/.local/state/omarchy/zen/stats.json, and one row appended to the
+meditation log (the vault default, or meditationLogPath from shell.json
+when set). Ending early still logs the minutes actually practiced.
+Sessions under a minute are not logged.
+
 Usage: tb-guide [pattern] [minutes]
   pattern  box (default), 478, coherent, or a custom key from
            ~/.config/omarchy/zen/patterns.json
   minutes  session length (default 5)
 
-Ctrl+C ends the session early. Sessions under a minute are not logged
-to the meditation log or stats — same rule as the GUI overlay.
+Ctrl+C ends the session early.
 """
 
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import sys
 import time
+from datetime import datetime
 
 # Built-in patterns, mirroring ZenModel.js PATTERNS.
 # Each phase: (label, seconds, fullness at end) — fullness 0 = exhaled,
@@ -69,6 +77,164 @@ RESET = "\x1b[0m"
 # circle drawn in character cells needs the x axis stretched.
 ASPECT = 2.0
 MIN_RADIUS = 1.5
+
+# ---- Session logging, mirroring ZenModel.js / BreatheOverlay.qml ----
+# Stats are stored as {"days": {"2026-08-22": 10, ...}} minutes.
+STATS_PATH = os.path.expanduser("~/.local/state/omarchy/zen/stats.json")
+MEDITATION_LOG_HEADER = (
+    "# Meditation Log\n"
+    "\n"
+    "Sessions logged by Terminal-Breather (fork of luotao.zen) — one row per session, appended automatically when a session ends.\n"
+    "\n"
+    "| Date | Pattern | Minutes | Completed |\n"
+    "| --- | --- | --- | --- |"
+)
+
+
+def default_log_path(home):
+    """The vault default meditation log, mirroring meditationLogPath()."""
+    return (home or "") + "/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
+
+
+def normalize_log_path(raw, home):
+    """Port of ZenModel.js normalizeLogPath: the absolute path to save,
+    "" for "use the vault default", or None when the input is not a
+    usable path (whitespace-only, relative, or a bare ~ with no home)."""
+    text = "" if raw is None else str(raw)
+    if text == "":
+        return ""
+    trimmed = text.strip()
+    if trimmed == "":
+        return None
+    expanded = trimmed
+    if expanded == "~":
+        if not home:
+            return None
+        expanded = str(home)
+    elif expanded.startswith("~/"):
+        if not home:
+            return None
+        expanded = str(home) + expanded[1:]
+    if not expanded.startswith("/"):
+        return None
+    return expanded
+
+
+def resolve_log_path():
+    """The meditation-log path for this session: the meditationLogPath
+    setting from shell.json (normalised), or the vault default. An
+    invalid setting falls back to the default, the way the panel's
+    validation would never save it in the first place."""
+    home = os.path.expanduser("~")
+    setting = ""
+    try:
+        with open(os.path.expanduser("~/.config/omarchy/shell.json")) as f:
+            data = json.load(f)
+        setting = _find_luotaozen_setting(data, "meditationLogPath", "")
+    except (OSError, ValueError):
+        setting = ""
+    normalized = normalize_log_path(setting, home)
+    if normalized is None or normalized == "":
+        return default_log_path(home)
+    return normalized
+
+
+def _find_luotaozen_setting(data, key, fallback):
+    """Walk shell.json and return key from the luotao.zen bar entry."""
+    if isinstance(data, dict):
+        if data.get("id") == "luotao.zen" and key in data:
+            return data[key]
+        for value in data.values():
+            found = _find_luotaozen_setting(value, key, None)
+            if found is not None:
+                return found
+    elif isinstance(data, list):
+        for value in data:
+            found = _find_luotaozen_setting(value, key, None)
+            if found is not None:
+                return found
+    return fallback
+
+
+def parse_stats(raw):
+    """Port of ZenModel.js parseStats: {"days": {...}} or {} on bad input."""
+    try:
+        parsed = json.loads(raw or "{}")
+        if parsed and isinstance(parsed.get("days"), dict):
+            return {"days": parsed["days"]}
+    except (ValueError, TypeError):
+        pass
+    return {"days": {}}
+
+
+def add_minutes(stats, day_key, minutes):
+    """Port of ZenModel.js addMinutes: minutes are rounded when added."""
+    days = dict(stats.get("days", {}))
+    days[day_key] = round((days.get(day_key) or 0) + minutes)
+    return {"days": days}
+
+
+def log_row(date_key, pattern_name, minutes, completed):
+    """Port of ZenModel.js logRow. Pattern names are scrubbed so pipes
+    and newlines can never break the table or the line."""
+    name = re.sub(r"[|\r\n]", " ", str(pattern_name or ""))
+    name = re.sub(r"\s+", " ", name).strip()
+    if not name:
+        name = "Unknown"
+    return "| %s | %s | %d | %s |" % (
+        date_key, name, int(minutes) if minutes else 0,
+        "yes" if completed else "no")
+
+
+def log_session(pattern_name, elapsed_secs, total_secs, completed):
+    """Log a finished session the way BreatheOverlay.endSession does.
+
+    minutes is floor(elapsed / 60) when ended early, or max(1,
+    round(total / 60)) when completed. Nothing is logged under one
+    minute. Stats get mkdir -p and a full rewrite; the meditation log
+    is created with the header when missing, and skipped silently when
+    its folder is gone (no mkdir — the row never lands somewhere the
+    vault is not). Returns the minutes logged, or 0 when nothing was.
+    """
+    if completed:
+        minutes = max(1, round(total_secs / 60))
+    else:
+        minutes = int(elapsed_secs // 60)
+    if minutes < 1:
+        return 0
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Stats: read, add, write back (mkdir -p first, like
+    # persistStatsCommand).
+    try:
+        with open(STATS_PATH) as f:
+            stats = parse_stats(f.read())
+    except OSError:
+        stats = {"days": {}}
+    stats = add_minutes(stats, today, minutes)
+    try:
+        os.makedirs(os.path.dirname(STATS_PATH), exist_ok=True)
+        with open(STATS_PATH, "w") as f:
+            json.dump(stats, f)
+    except OSError:
+        pass
+
+    # Meditation log: create with the header when missing, then append
+    # the row. Skip silently when the folder is gone.
+    log_path = resolve_log_path()
+    try:
+        if not os.path.isdir(os.path.dirname(log_path)):
+            return minutes
+        row = log_row(today, pattern_name, minutes, completed)
+        if not os.path.isfile(log_path):
+            with open(log_path, "w") as f:
+                f.write(MEDITATION_LOG_HEADER + "\n")
+        with open(log_path, "a") as f:
+            f.write(row + "\n")
+    except OSError:
+        pass
+    return minutes
 
 
 def load_custom_patterns():
@@ -228,11 +394,21 @@ def main():
         sys.stdout.flush()
 
     elapsed = time.monotonic() - start
+    completed = elapsed >= total_secs and not stop["flag"]
+    logged = log_session(pat["name"], elapsed, total_secs, completed)
     print()
-    if elapsed >= 60:
-        print("Done — %s · %s. Nice work." % (pat["name"], fmt_clock(elapsed)))
+    if completed:
+        if logged >= 1:
+            print("Done — %s · %s. Logged %d min to your meditation log." % (
+                pat["name"], fmt_clock(elapsed), logged))
+        else:
+            print("Done — %s · %s. Nice work." % (pat["name"], fmt_clock(elapsed)))
     else:
-        print("Ended early after %s (under a minute — not logged)." % fmt_clock(elapsed))
+        if logged >= 1:
+            print("Ended early after %s — logged %d min." % (
+                fmt_clock(elapsed), logged))
+        else:
+            print("Ended early after %s (under a minute — not logged)." % fmt_clock(elapsed))
     return 0
 
 
