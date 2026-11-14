@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# tb — launch Terminal Breather (luotao.zen) from the terminal.
+#
+# Install: copy this file and tb-guide into a directory on your PATH
+# (for example ~/.local/bin) and make both executable:
+#
+#   cp cli/tb cli/tb-guide ~/.local/bin/
+#   chmod +x ~/.local/bin/tb ~/.local/bin/tb-guide
+#
+# Then type `tb` and press Enter to start a session.
+#
+# Where the session shows up depends on how you are connected:
+#   - On the machine itself (local terminal): summons the fullscreen
+#     breathing overlay in the Omarchy shell, as before.
+#   - Over SSH (e.g. Termius or any SSH app on a phone): the GUI overlay
+#     opens on the machine's own displays, which you cannot see from
+#     the phone — so instead it runs a breathing guide right here in
+#     the terminal, with the same patterns and timings: a circle that
+#     grows as you breathe in, holds, and shrinks as you breathe out,
+#     with the phase name and countdown riding along.
+#
+# Usage: tb [--gui | --term] [pattern] [minutes]
+#   --gui    force the fullscreen overlay (even over SSH)
+#   --term   force the terminal guide (even locally)
+#   pattern  breathing pattern key (box, 478, coherent, or a custom key
+#            from ~/.config/omarchy/zen/patterns.json) — default: the
+#            saved default from shell.json, else "box"
+#   minutes  session length in minutes — default: the saved default
+#            from shell.json, else 5
+# Examples:
+#   tb          launch with saved defaults
+#   tb 478      4-7-8 breathing, saved minutes
+#   tb 478 10   4-7-8 breathing, 10 minutes
+#   tb --gui    fullscreen overlay, even over SSH
+
+set -euo pipefail
+
+mode="auto"
+args=()
+for a in "$@"; do
+  case "$a" in
+    --gui) mode="gui" ;;
+    --term) mode="term" ;;
+    *) args+=("$a") ;;
+  esac
+done
+
+SHELL_JSON="${HOME}/.config/omarchy/shell.json"
+
+# Saved defaults from shell.json (fall back to box / 5 if not set).
+saved_pattern="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .pattern // empty' "$SHELL_JSON" 2>/dev/null | head -1)"
+saved_minutes="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .minutes // empty' "$SHELL_JSON" 2>/dev/null | head -1)"
+
+pattern="${args[0]:-${saved_pattern:-box}}"
+minutes="${args[1]:-${saved_minutes:-5}}"
+
+# Minutes must be a positive integer; fall back to 5 on anything odd.
+case "$minutes" in
+  ''|*[!0-9]*|0) minutes=5 ;;
+esac
+
+# Over SSH the GUI overlay is invisible to you (it opens on the machine's
+# own displays), so run the terminal guide instead. Locally, summon the
+# overlay. --gui / --term override the detection.
+if [ "$mode" = "auto" ]; then
+  if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ]; then
+    mode="term"
+  else
+    mode="gui"
+  fi
+fi
+
+if [ "$mode" = "term" ]; then
+  # tb-guide lives next to this script; fall back to ~/.local/bin.
+  TB_GUIDE="$(dirname "$0")/tb-guide"
+  if [ ! -f "$TB_GUIDE" ]; then
+    TB_GUIDE="${HOME}/.local/bin/tb-guide"
+  fi
+  exec python3 "$TB_GUIDE" "$pattern" "$minutes"
+fi
+
+# GUI overlay: needs the desktop session variables, so they are picked up
+# from the user systemd environment before summoning.
+# shellcheck disable=SC2046
+export $(systemctl --user show-environment 2>/dev/null | grep -E '^(WAYLAND_DISPLAY|DISPLAY|XDG_RUNTIME_DIR|HYPRLAND_INSTANCE_SIGNATURE|OMARCHY_PATH)=' | xargs)
+
+payload="$(jq -cn --arg pattern "$pattern" --argjson minutes "$minutes" \
+  '{pattern: $pattern, minutes: $minutes}')"
+
+omarchy-shell shell summon luotao.zen "$payload"

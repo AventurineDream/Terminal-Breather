@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""tb-guide — a terminal breathing guide for Terminal Breather.
+
+Runs a breathing session right in the terminal (for use over SSH, e.g.
+Termius on a phone, where the GUI overlay on dooracle's displays is not
+visible). Same patterns and timings as the luotao.zen plugin.
+
+The guide draws a circle that grows as you breathe in, holds, and
+shrinks as you breathe out — the same idea as the overlay's figure that
+scales with the breath — with a colour that shifts by phase.
+
+Usage: tb-guide [pattern] [minutes]
+  pattern  box (default), 478, coherent, or a custom key from
+           ~/.config/omarchy/zen/patterns.json
+  minutes  session length (default 5)
+
+Ctrl+C ends the session early. Sessions under a minute are not logged
+to the meditation log or stats — same rule as the GUI overlay.
+"""
+
+import json
+import math
+import os
+import shutil
+import signal
+import sys
+import time
+
+# Built-in patterns, mirroring ZenModel.js PATTERNS.
+# Each phase: (label, seconds, fullness at end) — fullness 0 = exhaled,
+# 1 = inhaled. The circle grows toward 1 on inhale and shrinks toward 0
+# on exhale; a hold keeps the current fullness.
+BUILTIN = {
+    "box": {
+        "name": "Box breathing",
+        "phases": [
+            ("Breathe in", 4, 1),
+            ("Hold", 4, 1),
+            ("Breathe out", 4, 0),
+            ("Hold", 4, 0),
+        ],
+    },
+    "478": {
+        "name": "4-7-8",
+        "phases": [
+            ("Breathe in", 4, 1),
+            ("Hold", 7, 1),
+            ("Breathe out", 8, 0),
+        ],
+    },
+    "coherent": {
+        "name": "Coherent",
+        "phases": [
+            ("Breathe in", 5.5, 1),
+            ("Breathe out", 5.5, 0),
+        ],
+    },
+}
+
+# ANSI colours per phase (by the first word of the label).
+PHASE_COLOURS = {
+    "Breathe in": "36",   # cyan
+    "Hold": "33",         # amber
+    "Breathe out": "35",  # magenta
+}
+RESET = "\x1b[0m"
+
+# Terminal characters are about twice as tall as they are wide, so a
+# circle drawn in character cells needs the x axis stretched.
+ASPECT = 2.0
+MIN_RADIUS = 1.5
+
+
+def load_custom_patterns():
+    """Custom patterns from ~/.config/omarchy/zen/patterns.json."""
+    path = os.path.expanduser("~/.config/omarchy/zen/patterns.json")
+    out = {}
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return out
+    for p in data.get("patterns", []):
+        key = p.get("key")
+        phases = p.get("phases")
+        if not key or not phases:
+            continue
+        parsed = []
+        ok = True
+        for ph in phases:
+            try:
+                parsed.append(
+                    (str(ph["label"]), float(ph["secs"]), float(ph["to"]))
+                )
+            except (KeyError, TypeError, ValueError):
+                ok = False
+                break
+        if ok and parsed:
+            out[key] = {"name": p.get("name", key), "phases": parsed}
+    return out
+
+
+def resolve_pattern(key):
+    patterns = dict(BUILTIN)
+    patterns.update(load_custom_patterns())
+    if key in patterns:
+        return patterns[key]
+    return patterns["box"]
+
+
+def fmt_clock(total_secs):
+    total_secs = max(0, int(math.ceil(total_secs)))
+    return "%d:%02d" % (total_secs // 60, total_secs % 60)
+
+
+def circle_block(radius, max_radius, colour):
+    """Render the breathing circle as a fixed-height block of lines.
+
+    Always returns 2 * max_radius + 1 lines so the block height never
+    changes as the circle grows and shrinks (which keeps the redraw
+    stable). The circle is centred vertically in the block.
+    """
+    height = 2 * max_radius + 1
+    half_w = int(max_radius * ASPECT)
+    lines = []
+    for row in range(height):
+        y = row - max_radius
+        line = ""
+        for col in range(-half_w, half_w + 1):
+            d = math.sqrt((col / ASPECT) ** 2 + y ** 2)
+            if d <= radius - 0.6:
+                line += "●"
+            elif d <= radius:
+                line += "○"
+            else:
+                line += " "
+        lines.append(line.rstrip())
+    # Colour the whole circle; the text lines are drawn uncoloured.
+    coloured = ["\x1b[%sm%s%s" % (colour, ln, RESET) if ln.strip() else ln for ln in lines]
+    return coloured
+
+
+def main():
+    pattern_key = sys.argv[1] if len(sys.argv) > 1 else "box"
+    try:
+        minutes = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    except ValueError:
+        minutes = 5
+    if minutes <= 0:
+        minutes = 5
+
+    pat = resolve_pattern(pattern_key)
+    total_secs = minutes * 60
+    phases = pat["phases"]
+    cycle_secs = sum(ph[1] for ph in phases)
+    if cycle_secs <= 0:
+        cycle_secs = 16
+
+    # Size the circle to the terminal (narrow phone screens included).
+    try:
+        cols, rows = shutil.get_terminal_size()
+    except OSError:
+        cols, rows = 80, 24
+    max_radius = max(3, min(9, (cols // 2 - 2) // 2, (rows - 8) // 2))
+    max_radius = min(max_radius, 10)
+
+    # Phase boundaries within one cycle.
+    bounds = []
+    acc = 0.0
+    for label, secs, to in phases:
+        bounds.append((acc, acc + secs, label, to))
+        acc += secs
+
+    def state_at(pos, elapsed):
+        for i, (start, end, label, to) in enumerate(bounds):
+            if pos < end or i == len(bounds) - 1:
+                prev_to = bounds[i - 1][3] if i > 0 else bounds[-1][3]
+                if elapsed < cycle_secs and i == 0:
+                    prev_to = 0.0
+                frac = (pos - start) / (end - start) if end > start else 1.0
+                frac = max(0.0, min(1.0, frac))
+                return label, end - pos, prev_to + (to - prev_to) * frac
+        return phases[-1][0], 0.0, phases[-1][2]
+
+    stop = {"flag": False}
+
+    def on_sigint(signum, frame):
+        stop["flag"] = True
+
+    signal.signal(signal.SIGINT, on_sigint)
+
+    circle_height = 2 * max_radius + 1
+    text_lines = 3  # phase, countdown, hint
+    block_lines = circle_height + text_lines
+
+    sys.stdout.write("\x1b[?25l")  # hide cursor
+    sys.stdout.flush()
+    try:
+        print("Terminal Breather — %s · %d min" % (pat["name"], minutes))
+        print("Ctrl+C to end early. Sessions under a minute are not logged.")
+        print()
+        for _ in range(block_lines):
+            print()
+
+        start = time.monotonic()
+        while True:
+            elapsed = time.monotonic() - start
+            remaining = total_secs - elapsed
+            if remaining <= 0 or stop["flag"]:
+                break
+            pos = elapsed % cycle_secs
+            label, phase_left, fullness = state_at(pos, elapsed)
+            radius = MIN_RADIUS + fullness * (max_radius - MIN_RADIUS)
+            colour = PHASE_COLOURS.get(label, "36")
+
+            lines = circle_block(radius, max_radius, colour)
+            lines.append(label)
+            lines.append("%d · %s left" % (math.ceil(phase_left), fmt_clock(remaining)))
+            lines.append("")
+
+            sys.stdout.write("\x1b[%dA" % block_lines)
+            for ln in lines:
+                sys.stdout.write("\r\x1b[K%s\n" % ln)
+            sys.stdout.flush()
+            time.sleep(0.08)
+    finally:
+        sys.stdout.write("\x1b[?25h")  # show cursor again
+        sys.stdout.flush()
+
+    elapsed = time.monotonic() - start
+    print()
+    if elapsed >= 60:
+        print("Done — %s · %s. Nice work." % (pat["name"], fmt_clock(elapsed)))
+    else:
+        print("Ended early after %s (under a minute — not logged)." % fmt_clock(elapsed))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
