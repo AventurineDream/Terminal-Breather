@@ -19,21 +19,48 @@
 #     grows as you breathe in, holds, and shrinks as you breathe out,
 #     coloured by phase, with the phase name and countdown riding along.
 #
-# Usage: tb [--gui | --term] [pattern] [minutes]
+# Usage: tb [--gui | --term | --help] [pattern] [minutes]
 #   --gui    force the fullscreen overlay (even over SSH)
 #   --term   force the terminal guide (even locally)
+#   --help   show this help and exit (nothing is started)
 #   pattern  breathing pattern key (box, 478, coherent, or a custom key
 #            from ~/.config/omarchy/zen/patterns.json) — default: the
 #            saved default from shell.json, else "box"
 #   minutes  session length in minutes — default: the saved default
 #            from shell.json, else 5
+# Unknown --options are rejected, and so are extra arguments: a typo
+# must never silently start a session (a session of a minute or more
+# is logged to the meditation log).
 # Examples:
 #   tb          launch with saved defaults
 #   tb 478      4-7-8 breathing, saved minutes
 #   tb 478 10   4-7-8 breathing, 10 minutes
 #   tb --gui    fullscreen overlay, even over SSH
+#   tb --help   show this help
 
 set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+tb — launch Terminal Breather (luotao.zen) from the terminal.
+
+Usage: tb [--gui | --term | --help] [pattern] [minutes]
+  --gui    force the fullscreen overlay (even over SSH)
+  --term   force the terminal guide (even locally)
+  --help   show this help and exit (nothing is started)
+  pattern  breathing pattern key (box, 478, coherent, or a custom key
+           from ~/.config/omarchy/zen/patterns.json) — default: the
+           saved default from shell.json, else "box"
+  minutes  session length in minutes — default: the saved default
+           from shell.json, else 5
+
+Examples:
+  tb          launch with saved defaults
+  tb 478      4-7-8 breathing, saved minutes
+  tb 478 10   4-7-8 breathing, 10 minutes
+  tb --gui    fullscreen overlay, even over SSH
+EOF
+}
 
 mode="auto"
 args=()
@@ -41,15 +68,35 @@ for a in "$@"; do
   case "$a" in
     --gui) mode="gui" ;;
     --term) mode="term" ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "tb: unknown option '$a' — see 'tb --help'." >&2
+      usage >&2
+      exit 2
+      ;;
     *) args+=("$a") ;;
   esac
 done
 
+# More than [pattern] [minutes] is a typo, not a session: reject it
+# before anything starts.
+if [ "${#args[@]}" -gt 2 ]; then
+  echo "tb: too many arguments — usage: tb [--gui | --term] [pattern] [minutes]" >&2
+  usage >&2
+  exit 2
+fi
+
 SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 
 # Saved defaults from shell.json (fall back to box / 5 if not set).
-saved_pattern="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .pattern // empty' "$SHELL_JSON" 2>/dev/null | head -1)"
-saved_minutes="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .minutes // empty' "$SHELL_JSON" 2>/dev/null | head -1)"
+# The `|| true` keeps a missing/unreadable shell.json from killing the
+# script under `set -e` — jq exits 2 on a missing file, and the fallback
+# below is the documented behaviour.
+saved_pattern="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .pattern // empty' "$SHELL_JSON" 2>/dev/null | head -1 || true)"
+saved_minutes="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .minutes // empty' "$SHELL_JSON" 2>/dev/null | head -1 || true)"
 
 pattern="${args[0]:-${saved_pattern:-box}}"
 minutes="${args[1]:-${saved_minutes:-5}}"
