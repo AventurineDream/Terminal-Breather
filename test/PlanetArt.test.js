@@ -10,7 +10,7 @@ const src = fs
   .replace(/^\.pragma library\n/, "");
 const Art = new Function(
   src +
-    "\nreturn { FIGURES, frame, composite, resolveAnimation, visualScale, ids, cycle, animation, indexOf, maxCells };"
+    "\nreturn { FIGURES, frame, composite, resolveAnimation, visualScale, ids, cycle, animation, indexOf, maxCells, emptyFrame };"
 )();
 
 let pass = 0;
@@ -140,5 +140,354 @@ const sun = grid(Art.frame("sun", { cells: 31, aspect: 0.5, timeMs: 0, fullness:
 const sunCx = Math.round((Art.frame("sun", { cells: 31, aspect: 0.5, timeMs: 0, fullness: 1 }).cols - 1) / 2);
 const sunCy = 15;
 check("sun center brighter than a high-latitude limb", weight(cell(sun, sunCx, sunCy)) >= weight(cell(sun, sunCx, 4)));
+
+// --- Second-pass additions (Nov 13 2026): catalog, cycle, random,
+// case handling, size parity, accent layers, mandala breath, shape,
+// scale, caps, continuity. From audits/consistency-tests.md §4.1.
+
+function approx(a, b, eps) {
+  return Math.abs(a - b) < (eps === undefined ? 1e-9 : eps);
+}
+
+function layerCounts(fig) {
+  // Non-space cells per layer; split/join first so "\n" is not counted.
+  return fig.layers.map((l) => l.text.split("\n").join("").replace(/ /g, "").length);
+}
+
+function diskRatio(id, aspect) {
+  // On-screen disk diameter as a fraction of circleMax, modelling the
+  // overlay's own fit (BreatheOverlay.qml figureFontPx): ringed figures
+  // (saturn, uranus) are fit by disk diameter so the disk fills the stage
+  // and only the rings extend past it; all others are fit by grid extent.
+  // Font-independent.
+  const fig = Art.frame(id, { cells: 31, aspect: aspect, timeMs: 0, fullness: 1 });
+  const need = (id === "saturn" || id === "uranus") ? 2 * fig.disk : Math.max(fig.cols * aspect, fig.rows);
+  return (2 * fig.disk) / need;
+}
+
+// --- Catalog: exact, ordered, no drift ---
+check("catalog is exactly 14 figures", Art.FIGURES.length === 14);
+check(
+  "ids is random plus the 14 figures, no duplicates",
+  Art.ids().length === 15 &&
+    new Set(Art.ids()).size === 15 &&
+    Art.FIGURES.every((f) => Art.ids().includes(f.id))
+);
+check(
+  "catalog order is sun..neptune then 4 mandalas",
+  JSON.stringify(Art.FIGURES.map((f) => f.id)) ===
+    JSON.stringify(["sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune", "iris", "orbits", "petal", "lattice"])
+);
+check(
+  "every figure has id, name, kind body|mandala, hint",
+  Art.FIGURES.every((f) => f.id && f.name && (f.kind === "body" || f.kind === "mandala") && f.hint)
+);
+
+// --- Cycle: full round-trips, both directions, rapid presses ---
+check(
+  "cycle: 15 forward steps return to start, every entry",
+  Art.ids().every((id) => {
+    let c = id;
+    for (let i = 0; i < 15; i++) c = Art.cycle(c, 1);
+    return c === id;
+  })
+);
+check(
+  "cycle: 15 backward steps return to start, every entry",
+  Art.ids().every((id) => {
+    let c = id;
+    for (let i = 0; i < 15; i++) c = Art.cycle(c, -1);
+    return c === id;
+  })
+);
+check(
+  "cycle: 15 forward steps from random visit every entry exactly once",
+  (() => {
+    let c = "random";
+    const seen = new Set();
+    for (let i = 0; i < 15; i++) {
+      c = Art.cycle(c, 1);
+      seen.add(c);
+    }
+    return seen.size === 15 && Art.ids().every((id) => seen.has(id));
+  })()
+);
+check("cycle: backward wrap random -> lattice", Art.cycle("random", -1) === "lattice");
+check(
+  "cycle: unknown input steps from random (fwd sun, back lattice)",
+  Art.cycle("nope", 1) === "sun" && Art.cycle("nope", -1) === "lattice"
+);
+check(
+  "cycle: 100 rapid forward presses equal 10 (100 mod 15)",
+  Art.ids().every((id) => {
+    let a = id;
+    let b = id;
+    for (let i = 0; i < 100; i++) a = Art.cycle(a, 1);
+    for (let i = 0; i < 10; i++) b = Art.cycle(b, 1);
+    return a === b;
+  })
+);
+
+// --- Random: distribution, not just "not constant" ---
+check(
+  "random: 13000 consecutive seeds hit all 14 figures, none dominant",
+  (() => {
+    const counts = {};
+    for (let s = 0; s < 13000; s++) {
+      const id = Art.resolveAnimation("random", s);
+      counts[id] = (counts[id] || 0) + 1;
+    }
+    const vals = Object.values(counts);
+    return Object.keys(counts).length === 14 && Math.min.apply(null, vals) > 600 && Math.max.apply(null, vals) < 1300;
+  })()
+);
+check(
+  "random: never resolves to the literal id 'random'",
+  (() => {
+    for (let s = 0; s < 2000; s++) if (Art.resolveAnimation("random", s) === "random") return false;
+    return true;
+  })()
+);
+check(
+  "random: same seed, same figure (stable per millisecond)",
+  Art.resolveAnimation("random", 1794000000123) === Art.resolveAnimation("random", 1794000000123)
+);
+
+// --- Case + unknown handling ---
+check("frame: uppercase id renders that figure, not earth", Art.frame("JUPITER", { cells: 21 }).id === "jupiter");
+check("frame: unknown id falls back to earth", Art.frame("nope", { cells: 21 }).id === "earth");
+check("animation: 'RANDOM' is the Random choice", Art.animation("RANDOM") && Art.animation("RANDOM").name === "Random");
+check(
+  "animation: unknown id is null (panel shows 'Random' fallback)",
+  Art.animation("garbage") === null && Art.animation("earth ") === null
+);
+check(
+  "resolveAnimation: unknown id falls back to earth, not random",
+  Art.resolveAnimation("garbage", 1) === "earth" && Art.resolveAnimation("earth ", 1) === "earth"
+);
+
+// --- On-screen size parity (the headline gap) ---
+check(
+  "size parity: every figure's on-screen disk is 0.70..1.00 of circleMax (aspect 0.5)",
+  Art.FIGURES.every((f) => {
+    const r = diskRatio(f.id, 0.5);
+    return r >= 0.7 && r <= 1.0;
+  })
+);
+check(
+  "size parity: same band at aspect 0.46 (JetBrainsMono-ish)",
+  Art.FIGURES.every((f) => {
+    const r = diskRatio(f.id, 0.46);
+    return r >= 0.7 && r <= 1.0;
+  })
+);
+// Ringed planets are fit by disk diameter (BreatheOverlay.qml figureFontPx),
+// so the disk fills the stage and the font escapes the 8px floor; these two
+// pin the font and the rings-on-screen. adv/line 0.6/1.3 are the
+// JetBrainsMono assumption — re-measure on the live machine if they differ.
+check(
+  "size parity: saturn's disk-fit font escapes the 8px floor at 1080p",
+  (() => {
+    const circleMax = 410;
+    const line = 1.3;
+    const aspect = 0.46;
+    const fig = Art.frame("saturn", { maxCells: Art.maxCells(circleMax), aspect: aspect, timeMs: 0, fullness: 1 });
+    return circleMax / (2 * fig.disk * line) >= 8;
+  })()
+);
+check(
+  "size parity: saturn's rings stay on a 1920-wide screen at 1080p",
+  (() => {
+    const circleMax = 410;
+    const adv = 0.6;
+    const line = 1.3;
+    const aspect = 0.46;
+    const fig = Art.frame("saturn", { maxCells: Art.maxCells(circleMax), aspect: aspect, timeMs: 0, fullness: 1 });
+    const fontPx = Math.max(8, circleMax / (2 * fig.disk * line));
+    return fig.cols * adv * fontPx <= 1920;
+  })()
+);
+
+// --- Accent layers: every body must show its signature sometimes ---
+check(
+  "accent: mercury shows its bright layer in >=25% of frames over a full spin",
+  (() => {
+    let lit = 0;
+    let n = 0;
+    for (let t = 0; t <= 80000; t += 1000) {
+      n++;
+      if (layerCounts(Art.frame("mercury", { cells: 31, aspect: 0.5, timeMs: t, fullness: 1 }))[1] > 0) lit++;
+    }
+    return lit / n >= 0.25;
+  })()
+);
+check(
+  "accent: every body shows an accent layer (L1 or L2) at some point in its spin",
+  ["sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune"].every((id) => {
+    const period = { sun: 90000, mercury: 80000, venus: 74000, earth: 52000, moon: 70000, mars: 56000, jupiter: 34000, saturn: 42000, uranus: 64000, neptune: 38000 }[id];
+    for (let t = 0; t <= period; t += Math.round(period / 12)) {
+      const c = layerCounts(Art.frame(id, { cells: 31, aspect: 0.5, timeMs: t, fullness: 1 }));
+      if (c[1] + c[2] > 0) return true;
+    }
+    return false;
+  })
+);
+check(
+  "accent: moon keeps Tycho/rays visible across its libration",
+  (() => {
+    for (let t = 0; t <= 70000; t += 5000)
+      if (layerCounts(Art.frame("moon", { cells: 31, aspect: 0.5, timeMs: t, fullness: 1 }))[1] < 5) return false;
+    return true;
+  })()
+);
+
+// --- Mandala breath + thin features ---
+function irisEmpty(f) {
+  const fig = Art.frame("iris", { cells: 31, aspect: 0.5, timeMs: 0, fullness: f });
+  const rows = Art.composite(fig).split("\n");
+  const mx = Math.round((fig.cols - 1) / 2);
+  const my = Math.round((fig.rows - 1) / 2);
+  let n = 0;
+  for (let y = -7; y <= 7; y++)
+    for (let x = -7; x <= 7; x++) if ((rows[my + y] || "")[mx + x] === " ") n++;
+  return n;
+}
+check(
+  "iris: pupil opens gradually, empty count strictly increases with fullness",
+  (() => {
+    let prev = -1;
+    for (let f = 0; f <= 1.0001; f += 0.1) {
+      const e = irisEmpty(f);
+      if (e <= prev) return false;
+      prev = e;
+    }
+    return true;
+  })()
+);
+check(
+  "lattice: inner ring moves outward as fullness rises",
+  (() => {
+    function ringAt(f) {
+      const fig = Art.frame("lattice", { cells: 45, aspect: 0.5, timeMs: 0, fullness: f });
+      const rows = Art.composite(fig).split("\n");
+      const my = Math.round((fig.rows - 1) / 2);
+      const mx = Math.round((fig.cols - 1) / 2);
+      const line = rows[my];
+      for (let c = mx + 1; c < line.length; c++) if (line[c] === "·" || line[c] === "o") return c - mx;
+      return -1;
+    }
+    return ringAt(0) < ringAt(1);
+  })()
+);
+check(
+  "orbits: all 7 moons drawn (as 'o' or '+') in every sampled frame",
+  (() => {
+    for (let t = 0; t < 120000; t += 5000) {
+      const comp = Art.composite(Art.frame("orbits", { cells: 31, aspect: 0.5, timeMs: t, fullness: 1 }));
+      const moons = comp.split("o").length - 1 + (comp.split("+").length - 1);
+      if (moons < 7) return false;
+    }
+    return true;
+  })()
+);
+check(
+  "thin features survive at the smallest overlay size (cells=21)",
+  (() => {
+    function counts(id, chs) {
+      const comp = Art.composite(Art.frame(id, { cells: 21, aspect: 0.5, timeMs: 0, fullness: 0.6 }));
+      return chs.reduce((n, ch) => n + (comp.split(ch).length - 1), 0);
+    }
+    return (
+      counts("uranus", ["-"]) >= 8 &&
+      counts("orbits", ["·"]) >= 50 &&
+      counts("lattice", ["-", "|", "/", "\\"]) >= 40 &&
+      counts("saturn", ["=", "-"]) >= 100
+    );
+  })()
+);
+
+// --- Shape, scale, caps, continuity ---
+check(
+  "shape: every figure has odd cols and rows at cells 15/21/31/45",
+  [15, 21, 31, 45].every((cells) =>
+    Art.FIGURES.every((f) => {
+      const fig = Art.frame(f.id, { cells: cells, aspect: 0.5, timeMs: 0, fullness: 1 });
+      return fig.cols % 2 === 1 && fig.rows % 2 === 1;
+    })
+  )
+);
+check(
+  "shape: composite and every layer are fig.rows lines of fig.cols chars",
+  Art.FIGURES.every((f) => {
+    const fig = Art.frame(f.id, { cells: 31, aspect: 0.5, timeMs: 0, fullness: 1 });
+    const rows = Art.composite(fig).split("\n");
+    if (rows.length !== fig.rows || rows.some((r) => r.length !== fig.cols)) return false;
+    return fig.layers.every((l) => {
+      const lr = l.text.split("\n");
+      return lr.length === fig.rows && lr.every((r) => r.length === fig.cols);
+    });
+  })
+);
+check(
+  "scale: every figure is 0.42 exhaled, 0.71 half, 1 inhaled",
+  Art.FIGURES.every(
+    (f) =>
+      approx(Art.frame(f.id, { cells: 21, aspect: 0.5, timeMs: 0, fullness: 0 }).scale, 0.42) &&
+      approx(Art.frame(f.id, { cells: 21, aspect: 0.5, timeMs: 0, fullness: 0.5 }).scale, 0.71) &&
+      Art.frame(f.id, { cells: 21, aspect: 0.5, timeMs: 0, fullness: 1 }).scale === 1
+  )
+);
+check("frame: huge cells request is capped at 45 rows", Art.frame("earth", { cells: 200 }).rows <= 45);
+check("frame: NaN fullness still yields a finite scale", Number.isFinite(Art.frame("earth", { fullness: NaN }).scale));
+check("visualScale: NaN yields a finite scale", Number.isFinite(Art.visualScale(NaN)));
+check(
+  "visualScale: out-of-range fullness clamps (not NaN, not <0.42, not >1)",
+  Art.visualScale(-1) === 0.42 && Art.visualScale(2) === 1
+);
+check(
+  "emptyFrame: 1x1 transparent blank",
+  (() => {
+    const e = Art.emptyFrame();
+    return e.cols === 1 && e.rows === 1 && e.layers.length === 1 && e.layers[0].color === "transparent" && e.layers[0].text === " ";
+  })()
+);
+// The hard rule, as a test: adjacent 50ms frames (the overlay's timer tick)
+// must change only a small fraction of cells — no skipping, jumping, or
+// restarting. Jupiter mean 2.7 changed chars/tick, max 12 of 1891 (0.6%);
+// Earth clouds mean 8.1, max 19 (1.0%).
+check(
+  "continuity: no jumps — adjacent 50ms frames change <3% of cells (jupiter, earth, 5s)",
+  (() => {
+    const ids = ["jupiter", "earth"];
+    for (let k = 0; k < ids.length; k++) {
+      let prev = Art.composite(Art.frame(ids[k], { cells: 31, aspect: 0.5, timeMs: 0, fullness: 1 }));
+      const total = 31 * 61;
+      for (let t = 50; t <= 5000; t += 50) {
+        const cur = Art.composite(Art.frame(ids[k], { cells: 31, aspect: 0.5, timeMs: t, fullness: 1 }));
+        let ch = 0;
+        for (let i = 0; i < cur.length; i++) if (cur[i] !== prev[i]) ch++;
+        if (ch / total >= 0.03) return false;
+        prev = cur;
+      }
+    }
+    return true;
+  })()
+);
+check(
+  "maxCells: bounds 21..45",
+  Art.maxCells(1) === 21 && Art.maxCells(100) === 21 && Art.maxCells(300) === 25 && Art.maxCells(540) === 45 && Art.maxCells(10000) === 45
+);
+check(
+  "determinism: all figures identical across repeat frames",
+  Art.FIGURES.every((f) =>
+    [0, 12345].every((t) =>
+      [0, 0.5, 1].every(
+        (fl) =>
+          Art.composite(Art.frame(f.id, { cells: 21, aspect: 0.5, timeMs: t, fullness: fl })) ===
+          Art.composite(Art.frame(f.id, { cells: 21, aspect: 0.5, timeMs: t, fullness: fl }))
+      )
+    )
+  )
+);
 
 console.log(`PlanetArt tests: ${pass} passed${process.exitCode ? " (WITH FAILURES)" : ""}`);

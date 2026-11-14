@@ -12,7 +12,7 @@ const src = fs
   .replace(/^\.pragma library\n/, "");
 const factory = new Function(
   src +
-    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, logRow, appendLogCommand };"
+    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, parseStats, addMinutes, streakDays, dayKeyOffset, todayMinutes, statsSummary, weekSeries, weekTotal, formatRemaining, bellCommand, persistStatsCommand, MEDITATION_LOG_HEADER, meditationLogPath, logRow, appendLogCommand };"
 );
 const M = factory();
 
@@ -247,6 +247,164 @@ try {
 check(
   "missing folder fails silently, nothing created",
   !missingThrew && !fs.existsSync(path.join(tmp, "no-such-dir"))
+);
+
+// --- Second-pass additions (Nov 13 2026): stats parsing, streaks and
+// dates, breath continuity, shell commands. From audits/consistency-tests.md §4.2.
+
+// --- Stats parsing: what survives, what must not ---
+check(
+  "parseStats: corrupt, null-days, string-days, empty all give empty days",
+  JSON.stringify(M.parseStats("{oops").days) === "{}" &&
+    JSON.stringify(M.parseStats('{"days": null}').days) === "{}" &&
+    JSON.stringify(M.parseStats('{"days": "x"}').days) === "{}" &&
+    JSON.stringify(M.parseStats("").days) === "{}"
+);
+check("parseStats: array days is rejected, not kept", !Array.isArray(M.parseStats('{"days": [1,2]}').days));
+check("parseStats: valid days survive", M.parseStats('{"days": {"2026-11-11": 5}}').days["2026-11-11"] === 5);
+
+// --- Streaks and dates: the habit loop's load-bearing math ---
+check(
+  "streakDays: blank today counts back from yesterday",
+  M.streakDays({ days: { "2026-11-10": 5, "2026-11-11": 0 } }, "2026-11-11") === 1
+);
+check(
+  "streakDays: a gap breaks the streak",
+  M.streakDays({ days: { "2026-11-09": 5, "2026-11-11": 5 } }, "2026-11-11") === 1
+);
+check("streakDays: empty stats is 0", M.streakDays({ days: {} }, "2026-11-11") === 0);
+check(
+  "streakDays: month boundary holds",
+  M.streakDays({ days: { "2026-02-28": 3, "2026-03-01": 4 } }, "2026-03-01") === 2
+);
+check(
+  "dayKeyOffset: month, year, leap boundaries",
+  M.dayKeyOffset("2026-03-01", -1) === "2026-02-28" &&
+    M.dayKeyOffset("2026-01-01", -1) === "2025-12-31" &&
+    M.dayKeyOffset("2028-03-01", -1) === "2028-02-29" &&
+    M.dayKeyOffset("2026-12-31", 1) === "2027-01-01"
+);
+check(
+  "statsSummary: empty, streak-only, streak+today",
+  M.statsSummary({ days: {} }, "2026-11-11") === "No sessions yet" &&
+    M.statsSummary({ days: { "2026-11-10": 5, "2026-11-11": 16 } }, "2026-11-11") === "2-day streak · 16 min today" &&
+    M.statsSummary({ days: { "2026-11-10": 5 } }, "2026-11-11") === "1-day streak"
+);
+check("todayMinutes: missing day is 0", M.todayMinutes({ days: {} }, "2026-11-11") === 0);
+check(
+  "weekSeries: 7 days oldest-first, one today, Wed 2026-11-11 labelled W",
+  (() => {
+    const s = M.weekSeries({ days: { "2026-11-11": 5 } }, "2026-11-11");
+    return (
+      s.length === 7 &&
+      s[0].key === "2026-11-05" &&
+      s[6].key === "2026-11-11" &&
+      s[6].isToday &&
+      s[6].label === "W" &&
+      s[6].minutes === 5 &&
+      s.filter((x) => x.isToday).length === 1
+    );
+  })()
+);
+check(
+  "weekTotal: sums the series",
+  M.weekTotal(M.weekSeries({ days: { "2026-11-11": 5, "2026-11-10": 7 } }, "2026-11-11")) === 12
+);
+check(
+  "addMinutes: NaN minutes do not corrupt the day",
+  Number.isFinite(M.addMinutes({ days: {} }, "2026-11-11", NaN).days["2026-11-11"])
+);
+check(
+  "addMinutes: negative minutes do not subtract",
+  M.addMinutes({ days: { "2026-11-11": 5 } }, "2026-11-11", -2).days["2026-11-11"] === 5
+);
+
+// --- Breath continuity: the hard rule, as tests ---
+check(
+  "breathAt: fullness stays in [0,1] over two box cycles",
+  (() => {
+    for (let t = 0; t <= 32.001; t += 0.1) {
+      const f = M.breathAt(M.pattern("box"), t).fullness;
+      if (f < 0 || f > 1) return false;
+    }
+    return true;
+  })()
+);
+check(
+  "breathAt: no jumps — max fullness step per 0.1s under 0.05 (box)",
+  (() => {
+    let prev = null;
+    let max = 0;
+    for (let t = 0; t <= 32.001; t += 0.1) {
+      const f = M.breathAt(M.pattern("box"), t).fullness;
+      if (prev !== null) max = Math.max(max, Math.abs(f - prev));
+      prev = f;
+    }
+    return max < 0.05;
+  })()
+);
+check(
+  "breathAt: exact phase boundaries (box)",
+  (() => {
+    const b = (t) => M.breathAt(M.pattern("box"), t);
+    return (
+      b(0).label === "Breathe in" && approx(b(0).fullness, 0) &&
+      b(4).label === "Hold" && approx(b(4).fullness, 1) &&
+      b(8).label === "Breathe out" && approx(b(8).fullness, 1) &&
+      b(12).label === "Hold" && approx(b(12).fullness, 0) &&
+      b(16).label === "Breathe in" && approx(b(16).fullness, 0)
+    );
+  })()
+);
+check(
+  "breathAt: negative time behaves like t=0",
+  JSON.stringify(M.breathAt(M.pattern("box"), -5)) === JSON.stringify(M.breathAt(M.pattern("box"), 0))
+);
+check(
+  "breathAt: fullness stays in [0,1] over a ramped fire session",
+  (() => {
+    const fire = M.resolvePatterns(exampleRaw).map["breath-of-fire"];
+    for (let t = 0; t <= 120; t += 0.05) {
+      const f = M.breathAt(fire, t).fullness;
+      if (f < 0 || f > 1) return false;
+    }
+    return true;
+  })()
+);
+
+// --- Shell commands: argv shape + live behaviour ---
+check(
+  "bellCommand: sh -c argv, file as $1, prefers pw-play then paplay",
+  (() => {
+    const c = M.bellCommand("/x/y.oga");
+    return (
+      c[0] === "sh" && c[1] === "-c" && c[3] === "sh" && c[4] === "/x/y.oga" &&
+      c[2].includes('"$1"') && c[2].includes("pw-play") && c[2].includes("paplay") &&
+      !c[2].includes("/x/y.oga")
+    );
+  })()
+);
+check(
+  "bellCommand: missing sound file exits 0, silently",
+  (() => {
+    try {
+      const c = M.bellCommand("/no/such/file.oga");
+      execFileSync(c[0], c.slice(1), { stdio: "ignore" });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  })()
+);
+check(
+  "persistStatsCommand: writes the stats json, creating parent dirs",
+  (() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zen-stats-"));
+    const p = path.join(dir, "deep", "stats.json");
+    const cmd = M.persistStatsCommand(p, { days: { "2026-11-11": 5 } });
+    execFileSync(cmd[0], cmd.slice(1), { stdio: "ignore" });
+    return fs.readFileSync(p, "utf8") === JSON.stringify({ days: { "2026-11-11": 5 } });
+  })()
 );
 
 console.log(`ZenModel tests: ${pass} passed${process.exitCode ? " (WITH FAILURES)" : ""}`);
