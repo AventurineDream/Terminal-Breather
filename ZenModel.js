@@ -304,6 +304,33 @@ function meditationLogPath(home) {
   return (home || "") + "/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
 }
 
+// Normalize a user-entered meditation-log path from the panel Settings
+// field. Returns the absolute path to save, "" for "use the vault
+// default", or null when the input is not a usable path.
+//   - Truly empty input ("") means "use the vault default" and is valid.
+//   - Whitespace-only input is a mistake, not a deliberate clear — reject.
+//   - A leading "~/" expands to the home directory.
+//   - Anything else must already be absolute; a relative path is rejected,
+//     so a typo can never point the log somewhere unexpected.
+// The caller saves the returned string, or leaves the field (and the
+// setting) untouched when it gets null.
+function normalizeLogPath(raw, home) {
+  var text = String(raw == null ? "" : raw)
+  if (text === "") return ""
+  var trimmed = text.trim()
+  if (trimmed === "") return null
+  var expanded = trimmed
+  if (expanded === "~") {
+    if (!home) return null
+    expanded = String(home)
+  } else if (expanded.indexOf("~/") === 0) {
+    if (!home) return null
+    expanded = String(home) + expanded.slice(1)
+  }
+  if (expanded.charAt(0) !== "/") return null
+  return expanded
+}
+
 // One table row. Pattern names come from the config file, so pipes and
 // newlines are scrubbed — a name must never break the table or the line.
 function logRow(dateKey, patternName, minutes, completed) {

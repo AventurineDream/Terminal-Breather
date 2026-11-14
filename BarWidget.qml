@@ -39,8 +39,10 @@ Panel {
 
   // Settings section (collapsible, panel-local state).
   property bool settingsExpanded: false
-  // All figure ids in manifest order: random first, then planets, then mandalas.
-  readonly property var figureIds: ["random", "sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune", "iris", "orbits", "petal", "lattice"]
+  // All figure ids, built from PlanetArt.js: "random" first, then the 14
+  // figures (10 planets, 4 mandalas). Never copied by hand — if a figure
+  // is added to PlanetArt.js, it shows up here automatically.
+  readonly property var figureIds: Art.ids()
   // True while the log-path field has focus; the key catcher stays blocked
   // so typing/Enter/Escape go to the editor, not to panel actions.
   readonly property bool editorActive: logPathField.activeFocus
@@ -545,10 +547,26 @@ Panel {
               foreground: root.foreground
               font.family: root.fontFamily
               onAccepted: {
-                root.updateSetting("meditationLogPath", text)
-                logPathField.focus = false
+                // Validate through the model helper: trims, expands a
+                // leading ~/, and requires an absolute path. A null
+                // result means the input is not usable — leave the field
+                // (and the setting) untouched instead of saving a bad
+                // path. An empty result ("") is the vault default.
+                var normalized = Model.normalizeLogPath(text, Quickshell.env("HOME"))
+                if (normalized !== null)
+                  root.updateSetting("meditationLogPath", normalized)
+                else
+                  logPathField.text = String(root.setting("meditationLogPath", ""))
+                // Hand focus back to the key catcher so the panel
+                // shortcuts (1-9, a, s, Esc) keep working after editing.
+                keyCatcher.forceActiveFocus()
               }
-              Keys.onEscapePressed: logPathField.focus = false
+              Keys.onEscapePressed: {
+                // Discard half-typed text and give focus back to the key
+                // catcher, so the panel shortcuts keep working.
+                logPathField.text = String(root.setting("meditationLogPath", ""))
+                keyCatcher.forceActiveFocus()
+              }
             }
 
             Text {
@@ -578,7 +596,7 @@ Panel {
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
         }
-      }
+        }
       }
     }
   }
