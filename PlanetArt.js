@@ -266,8 +266,8 @@ function spinOf(id, timeMs) {
 function jupZone(deg) {
   var knots = [
     [-90, 0.22], [-58, 0.20], [-44, 0.62], [-34, 0.16],
-    [-26, 0.72], [-18, 0.14], [-12, 0.30], [-5, 0.92],
-    [3, 0.98], [9, 0.68], [15, 0.12], [23, 0.78],
+    [-26, 0.72], [-18, 0.14], [-12, 0.30], [-5, 0.82],
+    [3, 0.84], [9, 0.68], [15, 0.12], [23, 0.78],
     [31, 0.18], [42, 0.64], [58, 0.28], [90, 0.22]
   ]
   if (deg <= knots[0][0]) return knots[0][1]
@@ -294,12 +294,12 @@ function craterField(lat, lon, seed, count, rays) {
     var rad = 0.06 + hash2(n, 3, seed) * 0.10
     var d = angDist(lat, lon, clat, clon)
     if (d < rad * 0.62) shade -= 0.22
-    else if (d < rad * 0.92) bright += 0.10
+    else if (d < rad * 0.92) bright += 0.16
     if (rays && hash2(n, 4, seed) > 0.82 && d > rad && d < rad * 3.6) {
       var ang = Math.atan2(lat - clat, wrap(lon - clon))
       for (k = 0; k < 3; k++) {
         var ray = (hash2(n, 10 + k, seed) - 0.5) * 6
-        if (Math.abs(wrap(ang - ray)) < 0.06) bright += 0.10 * (1 - d / (rad * 3.6))
+        if (Math.abs(wrap(ang - ray)) < 0.06) bright += 0.16 * (1 - d / (rad * 3.6))
       }
     }
   }
@@ -357,37 +357,39 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     var boil = timeMs / 8000
     var g = fbm(lon * 5 + boil, lat * 5 + boil * 0.4, seed, 4)
     t = Math.pow(p.nz, 0.42) * (0.48 + 0.52 * g)
+    if (t > 0.80) t = 0.80
     var s
     for (s = 0; s < 3; s++) {
       var slat = (hash2(s, 8, seed) - 0.5) * 1.2
       var slon = (hash2(s, 9, seed) - 0.5) * 4 + spin * 0.35
       var sd = angDist(lat, lon, slat, slon)
       var sr = 0.06 + hash2(s, 10, seed) * 0.05
-      if (sd < sr) t *= 0.35
-      else if (sd < sr * 1.7) t *= 0.62
+      if (sd < sr) t *= 0.55
+      else if (sd < sr * 1.7) t *= 0.75
     }
-    if (t > 0.82) layer = 1
+    if (t > 0.78) layer = 1
   } else if (id === "mercury") {
     var cr = craterField(lat, lon, seed, 16, true)
     var grain = fbm(lon * 6, lat * 6, seed, 2)
     t = p.light * (0.58 + 0.22 * grain + cr.shade + cr.bright)
-    if (cr.bright > 0.12) layer = 1
+    if (cr.bright > 0.08) layer = 1
   } else if (id === "venus") {
     var cloud = fbm(lon * 1.3 + timeMs / 70000, lat * 1.7, seed + 4, 3)
     t = p.light * (0.74 + 0.08 * (cloud - 0.5))
     var armLon = wrap(lon)
     var arm = Math.abs(Math.abs(lat) - Math.max(0, armLon) * 0.48)
-    if (arm < 0.07 && lat > -0.08 && lat < 0.52 && armLon > -0.1 && armLon < 1.25) {
-      layer = 1
-      t = p.light * 0.96
+    if (arm < 0.09 && lat > -0.52 && lat < 0.52 && armLon > -0.1 && armLon < 1.25) {
+      layer = 2
+      t = p.light * 0.42
     }
   } else if (id === "earth") {
     var tile = mapChar(EARTH, lat, lon)
     var ice = tile === "*" || Math.abs(lat) > 1.38
     var land = tile === "#"
     var deck = curl(lon * 0.7 + timeMs / 42000, lat * 0.55, seed)
+    var polarFloor = Math.abs(lat) > 1.02 ? 0.055 : 0
     var spec = (p.nx - HX) * (p.nx - HX) + (p.ny - HY) * (p.ny - HY) + (p.nz - HZ) * (p.nz - HZ)
-    if (deck > 0.76 && p.nz > 0.25) {
+    if (deck > 0.68 && p.nz > 0.25) {
       layer = 2
       t = p.light * (0.84 + 0.14 * deck)
     } else if (ice) {
@@ -398,10 +400,10 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
       t = p.light * (0.70 + 0.12 * fbm(lon * 3, lat * 3, seed, 2))
     } else {
       layer = 0
-      t = p.light * (0.40 + 0.08 * fbm(lon * 2, lat * 2, seed + 2, 2))
-      if (spec < 0.006) {
+      t = Math.max(p.light * (0.40 + 0.08 * fbm(lon * 2, lat * 2, seed + 2, 2)), polarFloor)
+      if (spec < 0.0035) {
         layer = 2
-        t = 0.92
+        t = 0.80
       }
     }
   } else if (id === "moon") {
@@ -431,10 +433,10 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     t = p.light * (0.60 + 0.14 * dust)
     if (lat > 1.18) {
       layer = 1
-      t = p.light * 0.92
-    } else if (lat > -0.08 && lat < 0.46 && Math.abs(wrap(lon - 1.05)) < 0.16 + 0.18 * (0.46 - lat)) {
+      t = Math.max(p.light * 0.92, 0.55)
+    } else if (lat > -0.08 && lat < 0.46 && Math.abs(wrap(lon - 0.72)) < 0.20 + 0.22 * (0.46 - lat)) {
       layer = 2
-      t = p.light * 0.32
+      t = p.light * 0.20
     } else if (ellipse(lat, lon, -0.70, 0.50, 0.14, 0.16)) {
       layer = 1
       t = p.light * 0.88
@@ -445,12 +447,12 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     var dlat = lat + 0.38
     var dlon = wrap(lon - 0.50)
     var oval = (dlat / 0.22) * (dlat / 0.22) + (dlon / 0.46) * (dlon / 0.46)
-    if (oval < 1 && p.nz > 0.28) {
+    if (oval < 1 && p.nz > 0.20) {
       layer = 2
-      t = p.light * (oval > 0.78 ? 0.46 : 0.86)
+      t = p.light * (oval > 0.78 ? 0.30 : 0.95)
     } else if (zone < 0.36) {
       layer = 1
-      t = p.light * (0.20 + 0.16 * zone)
+      t = Math.max(p.light * (0.20 + 0.16 * zone), 0.09)
     } else {
       layer = 0
       t = p.light * (0.58 + 0.34 * zone)
@@ -459,9 +461,9 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     var sdeg = lat * 180 / Math.PI
     var band = 0.70 + 0.10 * Math.sin(sdeg * 0.11)
     t = p.light * band
-    if (Math.abs(p.sy - 0.05) < 0.045 && p.r2 < 0.96) {
+    if (Math.abs(p.sy - 0.05) < 0.030 && p.r2 < 0.96) {
       layer = 2
-      t = p.light * 0.28
+      t = p.light * 0.45
     } else if (band < 0.66) {
       layer = 2
     }
@@ -472,14 +474,14 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     if (hood > 0.16) layer = 1
   } else if (id === "neptune") {
     var ndeg = lat * 180 / Math.PI
-    t = p.light * (0.52 + 0.05 * Math.sin(ndeg * 0.16))
+    t = p.light * (0.58 + 0.05 * Math.sin(ndeg * 0.16))
     var spot = ellipse(lat, lon, -0.24, 0.20, 0.24, 0.42)
     if (spot) {
       layer = 2
-      t = p.light * 0.42
+      t = p.light * 0.26
     }
     var nc = fbm(lon * 3.2, lat * 4.2, seed + 6, 3)
-    if (!spot && nc > 0.86 && Math.abs(lat) < 0.7 && p.nz > 0.4) {
+    if (!spot && nc > 0.72 && Math.abs(lat) < 0.7 && p.nz > 0.4) {
       layer = 1
       t = p.light * 0.72
     }
@@ -499,7 +501,7 @@ function stampAt(grid, cols, rows, col, row, ch, layer) {
 }
 
 function ringGlyph(id, sx, sy) {
-  var tilt = id === "saturn" ? 0.34 : 0.13
+  var tilt = id === "saturn" ? 0.34 : 0.20
   var rr = Math.sqrt(sx * sx + (sy / tilt) * (sy / tilt))
   if (id === "uranus") {
     if (rr >= 1.06 && rr < 1.48) return { ch: "-", layer: 2 }
@@ -544,7 +546,7 @@ function prominence(sx, sy, timeMs) {
     var delta = Math.abs(wrap(ang - base))
     if (delta > 0.30) continue
     var arch = 1.035 + 0.09 * Math.sin((delta / 0.30) * Math.PI)
-    if (Math.abs(r - arch) < 0.018) return true
+    if (Math.abs(r - arch) < 0.030) return true
   }
   return false
 }
@@ -582,7 +584,6 @@ function paintMandala(id, sx, sy, col, row, spin, fullness) {
     var speeds = [1.1, 0.62, 0.34]
     var k
     for (k = 0; k < rings.length; k++) {
-      if (Math.abs(r - rings[k]) < 0.026) return { ch: "·", layer: 1 }
       var m
       for (m = 0; m < moons[k]; m++) {
         var ang = spin * speeds[k] + m * (Math.PI * 2 / moons[k])
@@ -591,19 +592,21 @@ function paintMandala(id, sx, sy, col, row, spin, fullness) {
         var md = Math.sqrt((sx - mx) * (sx - mx) + (sy - my) * (sy - my))
         if (md < 0.055) return { ch: md < 0.028 ? "o" : "+", layer: 2 }
       }
+      if (Math.abs(r - rings[k]) < 0.026) return { ch: "·", layer: 1 }
     }
     if (r < 0.06) return { ch: "+", layer: 0 }
     return null
   }
   if (id === "petal") {
     var fold = Math.cos(8 * theta)
-    var lobe = 0.20 + 0.68 * Math.pow(Math.max(0, fold), 0.24)
+    var lobe = 0.20 + 0.68 * Math.pow(Math.max(0, fold), 1.5)
+    if (fold < 0.15 && r > 0.22) return null
     if (r > lobe || r > 0.96) return null
     if (r < 0.08) return { ch: "+", layer: 2 }
     if (lobe - r < 0.03) return { ch: "+", layer: 1 }
     var step = Math.PI / 4
     var center = Math.round(theta / step) * step
-    if (Math.abs(wrap(theta - center)) < 0.045 && r > 0.18) return { ch: ":", layer: 2 }
+    if (Math.abs(wrap(theta - center)) < 0.045 && r > 0.18) return { ch: "+", layer: 2 }
     return { ch: ":", layer: 0 }
   }
   var spokeStep = Math.PI * 2 / 12
@@ -613,12 +616,16 @@ function paintMandala(id, sx, sy, col, row, spin, fullness) {
   var onSpoke = delta * Math.max(r, 0.10) < 0.026 && r < 0.92 && r > 0.08
   var ringsAt = [0.22 + 0.04 * clamp01(fullness), 0.44, 0.66, 0.86]
   var onRing = false
+  var ringDist = 1
   var q
   for (q = 0; q < ringsAt.length; q++) {
-    if (Math.abs(r - ringsAt[q]) < 0.020) onRing = true
+    var rd = Math.abs(r - ringsAt[q])
+    if (rd < ringDist) ringDist = rd
+    if (rd < 0.016) onRing = true
   }
   if (r > 0.96) return null
-  if (onSpoke && onRing) return { ch: "o", layer: 2 }
+  if (r < 0.05) return { ch: "+", layer: 2 }
+  if (onSpoke && onRing && delta * Math.max(r, 0.10) < 0.020 && ringDist < 0.014) return { ch: "o", layer: 2 }
   if (onSpoke) return { ch: spokeGlyph(spokeAngle), layer: 0 }
   if (onRing) return { ch: "·", layer: 1 }
   return null
@@ -652,7 +659,8 @@ function paintAtmosphere(id, sx, sy) {
   if (id === "sun" || id === "mercury" || id === "moon") return false
   if (id === "iris" || id === "orbits" || id === "petal" || id === "lattice") return false
   if (id === "saturn" || id === "uranus") return false
-  var r = Math.sqrt(sx * sx + sy * sy)
+  var flat = id === "jupiter" ? 0.945 : 1
+  var r = Math.sqrt(sx * sx + (sy / flat) * (sy / flat))
   if (r < 1.01 || r > 1.06) return false
   return sy > -0.05
 }
