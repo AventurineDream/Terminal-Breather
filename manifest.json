@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "luotao.zen",
   "name": "Zen",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "Luo Tao <luotao@hey.com>",
   "license": "MIT",
   "description": "Guided-breathing meditation for the Omarchy shell: a fullscreen ASCII figure — a planet or a geometric mandala — that grows as you breathe in and shrinks as you breathe out, with built-in and custom patterns, session tracking and a daily streak in the bar, and a per-session row in an Obsidian meditation log.",

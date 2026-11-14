@@ -37,6 +37,41 @@ Panel {
   readonly property var patternKeys: resolvedPatterns.order
   readonly property var minuteChoices: [5, 10, 15, 20]
 
+  // Settings section (collapsible, panel-local state).
+  property bool settingsExpanded: false
+  // All figure ids, built from PlanetArt.js: "random" first, then the 14
+  // figures (10 planets, 4 mandalas). Never copied by hand — if a figure
+  // is added to PlanetArt.js, it shows up here automatically.
+  readonly property var figureIds: Art.ids()
+  // True while the log-path field has focus; the key catcher stays blocked
+  // so typing/Enter/Escape go to the editor, not to panel actions.
+  readonly property bool editorActive: logPathField.activeFocus
+
+  function settingValue(key, fallback) {
+    if (root.settings && root.settings[key] !== undefined)
+      return root.settings[key]
+    return fallback
+  }
+
+  // Write one settings key. updateEntryInline REPLACES the whole bar
+  // entry, so the full settings object is passed every time — copied
+  // from the existing settings, with the key set. Copying instead of
+  // rebuilding from a hardcoded key list means a key added later (or
+  // set by hand) is never wiped by a panel change.
+  function updateSetting(key, value) {
+    var s = { id: root.moduleName }
+    if (root.settings) {
+      for (var k in root.settings)
+        if (k !== "id") s[k] = root.settings[k]
+    }
+    s[key] = value
+    root.settings = s
+    if (key === "animation")
+      chosenAnimation = String(value)
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, s)
+  }
+
   function choose(patternKey, minutes) {
     chosenPattern = patternKey
     chosenMinutes = minutes
@@ -75,8 +110,9 @@ Panel {
 
   // A watch established while the file doesn't exist yet never fires, so
   // reload whenever the panel opens — the streak is fresh every time it is
-  // actually looked at.
-  onOpenedChanged: if (opened) { statsFile.reload(); patternsFile.reload() }
+  // actually looked at. The log-path field is reset to the current setting
+  // on open, so it never shows a stale half-typed value.
+  onOpenedChanged: if (opened) { statsFile.reload(); patternsFile.reload(); logPathField.text = String(setting("meditationLogPath", "")) }
 
   FileView {
     id: statsFile
@@ -186,6 +222,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.editorActive
 
       onCloseRequested: root.close()
       onReturnRequested: root.startSession(root.chosenPattern, root.chosenMinutes)
@@ -201,12 +238,42 @@ Panel {
         else if (k === "s" || k === " ") root.startSession(root.chosenPattern, root.chosenMinutes)
       }
 
-      Column {
-        id: column
-        width: parent.width
-        spacing: Style.space(12)
+      Flickable {
+        id: scroller
+        anchors.fill: parent
+        clip: true
+        contentWidth: width
+        contentHeight: column.implicitHeight
 
-        PanelHero {
+        // Wheel events were not reaching the Flickable's built-in handler
+        // on this surface (drag scrolled, the wheel did not). Root cause
+        // is UNKNOWN. This explicit handler is a workaround, ported from
+        // OmoPomodorachy PR #11 (1.9.1) via Ohm-My-Usage Phase 1: if the
+        // built-in wheel handling ever starts working, REMOVE this
+        // WheelHandler, or the page will scroll twice per wheel step
+        // (double scroll). Touchpads report smooth pixel deltas; a mouse
+        // wheel reports angle deltas in 120ths of a degree per notch.
+        // 48px per notch is a comfortable step. The event is only
+        // accepted when the content actually moves, so a wheel step at
+        // the top or bottom still propagates.
+        WheelHandler {
+          onWheel: function (event) {
+            var step = event.pixelDelta.y !== 0 ? event.pixelDelta.y : event.angleDelta.y / 120 * 48;
+            var maxY = scroller.originY + Math.max(0, scroller.contentHeight - scroller.height);
+            var next = Math.max(scroller.originY, Math.min(scroller.contentY - step, maxY));
+            if (next !== scroller.contentY) {
+              scroller.contentY = next;
+              event.accepted = true;
+            }
+          }
+        }
+
+        Column {
+          id: column
+          width: parent.width
+          spacing: Style.space(12)
+
+          PanelHero {
           width: parent.width
           title: "Zen"
           meta: root.summary
@@ -355,6 +422,164 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
         }
+
+        // Settings: figure picker, bell, do-not-disturb, and the
+        // meditation-log path. Collapsed by default so the session
+        // setup stays the focus; every change writes back to shell.json
+        // via updateEntryInline, so it is the default from then on.
+        Column {
+          width: parent.width
+          spacing: Style.space(8)
+
+          MouseArea {
+            width: parent.width
+            height: settingsHeader.implicitHeight
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.settingsExpanded = !root.settingsExpanded
+
+            Text {
+              id: settingsHeader
+              text: (root.settingsExpanded ? "v " : "> ") + "Settings"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.settingsExpanded
+
+            Text {
+              text: "Figure"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Repeater {
+                model: root.figureIds
+
+                Button {
+                  required property string modelData
+                  text: modelData === "random" ? "Random" : (Art.animation(modelData) ? Art.animation(modelData).name : modelData)
+                  tooltipText: modelData === "random" ? "Pick a random figure each session" : (Art.animation(modelData) ? Art.animation(modelData).hint : "")
+                  bordered: true
+                  selected: root.chosenAnimation === modelData
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.updateSetting("animation", modelData)
+                }
+              }
+            }
+
+            Text {
+              text: "Bell"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(6)
+              Button {
+                text: "On"
+                bordered: true
+                selected: root.settingValue("bell", true) !== false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("bell", true)
+              }
+              Button {
+                text: "Off"
+                bordered: true
+                selected: root.settingValue("bell", true) === false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("bell", false)
+              }
+            }
+
+            Text {
+              text: "Do not disturb"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(6)
+              Button {
+                text: "On"
+                bordered: true
+                selected: root.settingValue("dnd", true) !== false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("dnd", true)
+              }
+              Button {
+                text: "Off"
+                bordered: true
+                selected: root.settingValue("dnd", true) === false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("dnd", false)
+              }
+            }
+
+            Text {
+              text: "Meditation log"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            TextField {
+              id: logPathField
+              width: parent.width
+              placeholderText: "Vault default (empty)"
+              text: String(root.setting("meditationLogPath", ""))
+              foreground: root.foreground
+              font.family: root.fontFamily
+              onAccepted: {
+                // Validate through the model helper: trims, expands a
+                // leading ~/, and requires an absolute path. A null
+                // result means the input is not usable — leave the field
+                // (and the setting) untouched instead of saving a bad
+                // path. An empty result ("") is the vault default.
+                var normalized = Model.normalizeLogPath(text, Quickshell.env("HOME"))
+                if (normalized !== null)
+                  root.updateSetting("meditationLogPath", normalized)
+                else
+                  logPathField.text = String(root.setting("meditationLogPath", ""))
+                // Hand focus back to the key catcher so the panel
+                // shortcuts (1-9, a, s, Esc) keep working after editing.
+                keyCatcher.forceActiveFocus()
+              }
+              Keys.onEscapePressed: {
+                // Discard half-typed text and give focus back to the key
+                // catcher, so the panel shortcuts keep working.
+                logPathField.text = String(root.setting("meditationLogPath", ""))
+                keyCatcher.forceActiveFocus()
+              }
+            }
+
+            Text {
+              width: parent.width
+              text: "Empty = the vault default. Enter saves."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+          }
+        }
+
         Button {
           text: "Begin"
           bordered: true
@@ -370,6 +595,7 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
+        }
         }
       }
     }

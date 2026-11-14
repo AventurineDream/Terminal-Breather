@@ -88,6 +88,8 @@ Pattern and length chosen in the panel are written back to `shell.json`, so your
 
 ### Settings
 
+The panel has a collapsible **Settings** section (below the figure picker): a picker for the 14 figures plus Random, bell and do-not-disturb toggles, and a field for the meditation-log path (empty = the vault default). Every change is written back to `shell.json`, so it is the default from then on. The same settings are also available from the command line:
+
 ```bash
 omarchy bar set luotao.zen bell false   # no bells
 omarchy bar set luotao.zen dnd false    # leave notifications alone

@@ -12,7 +12,7 @@ const src = fs
   .replace(/^\.pragma library\n/, "");
 const factory = new Function(
   src +
-    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, logRow, appendLogCommand };"
+    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, normalizeLogPath, logRow, appendLogCommand };"
 );
 const M = factory();
 
@@ -171,6 +171,41 @@ check(
   "log path default",
   M.meditationLogPath("/home/aven") ===
     "/home/aven/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
+);
+check(
+  "normalizeLogPath: empty means vault default",
+  M.normalizeLogPath("", "/home/aven") === ""
+);
+check(
+  "normalizeLogPath: whitespace-only is rejected",
+  M.normalizeLogPath("   ", "/home/aven") === null
+);
+check(
+  "normalizeLogPath: trims surrounding whitespace",
+  M.normalizeLogPath("  /home/aven/notes/meditation.md  ", "/home/aven") ===
+    "/home/aven/notes/meditation.md"
+);
+check(
+  "normalizeLogPath: expands leading ~/",
+  M.normalizeLogPath("~/notes/meditation.md", "/home/aven") ===
+    "/home/aven/notes/meditation.md"
+);
+check(
+  "normalizeLogPath: bare ~ expands to home",
+  M.normalizeLogPath("~", "/home/aven") === "/home/aven"
+);
+check(
+  "normalizeLogPath: relative path is rejected",
+  M.normalizeLogPath("notes/meditation.md", "/home/aven") === null
+);
+check(
+  "normalizeLogPath: absolute path passes through",
+  M.normalizeLogPath("/home/aven/notes/meditation.md", "/home/aven") ===
+    "/home/aven/notes/meditation.md"
+);
+check(
+  "normalizeLogPath: null input is empty (default)",
+  M.normalizeLogPath(null, "/home/aven") === ""
 );
 check(
   "logRow completed",
