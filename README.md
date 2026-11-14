@@ -116,7 +116,9 @@ countdown riding along — the same patterns and timings as the overlay,
 including your custom patterns from `patterns.json`. `Ctrl+C` ends it
 early; sessions under a minute are not logged, same as the overlay.
 `tb --gui` forces the overlay and `tb --term` forces the terminal
-guide, whichever way you are connected.
+guide, whichever way you are connected. `tb --help` prints the usage;
+unknown `--options` and extra arguments are rejected instead of
+starting a session, so a typo can never silently log a session.
 
 ### Settings
 
