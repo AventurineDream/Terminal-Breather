@@ -12,7 +12,7 @@ const src = fs
   .replace(/^\.pragma library\n/, "");
 const factory = new Function(
   src +
-    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, normalizeLogPath, logRow, appendLogCommand };"
+    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, patternOptions, minuteOptions, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, normalizeLogPath, logRow, appendLogCommand };"
 );
 const M = factory();
 
@@ -155,6 +155,36 @@ check("bad ramp dropped, pattern kept", rampBad.length === 2 && rampBad[0].ramp 
 check(
   "good ramp copied clean",
   JSON.stringify(rampBad[1].ramp) === '{"from":2,"to":0.5,"overSecs":60}'
+);
+
+// --- Dropdown options (panel pickers) ---
+check(
+  "patternOptions built-ins",
+  JSON.stringify(M.patternOptions(M.resolvePatterns(""))) ===
+    '[{"value":"box","label":"Box breathing"},{"value":"478","label":"4-7-8"},{"value":"coherent","label":"Coherent"}]'
+);
+check(
+  "patternOptions include customs in file order",
+  JSON.stringify(M.patternOptions(r1).map((o) => o.value)) ===
+    '["box","478","coherent","slow-6","calm-466","breath-of-fire"]'
+);
+check(
+  "patternOptions custom label",
+  M.patternOptions(r1)[3].label === "Slow 6"
+);
+check(
+  "patternOptions default to built-ins without resolved",
+  M.patternOptions().length === 3 && M.patternOptions()[0].value === "box"
+);
+check(
+  "minuteOptions default",
+  JSON.stringify(M.minuteOptions()) ===
+    '[{"value":"5","label":"5 min"},{"value":"10","label":"10 min"},{"value":"15","label":"15 min"},{"value":"20","label":"20 min"}]'
+);
+check(
+  "minuteOptions values are strings, labels carry min",
+  M.minuteOptions([1, 30])[1].value === "30" &&
+    M.minuteOptions([1, 30])[1].label === "30 min"
 );
 
 // --- Stats helpers untouched (regression) ---

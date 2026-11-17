@@ -36,6 +36,10 @@ Panel {
 
   readonly property var patternKeys: resolvedPatterns.order
   readonly property var minuteChoices: [5, 10, 15, 20]
+  // { value, label } pairs for the shell Dropdowns below, rebuilt whenever
+  // the resolved patterns (or the minute list) change.
+  readonly property var patternOptions: Model.patternOptions(root.resolvedPatterns)
+  readonly property var minuteOptions: Model.minuteOptions(root.minuteChoices)
 
   // Settings section (collapsible, panel-local state).
   property bool settingsExpanded: false
@@ -46,6 +50,10 @@ Panel {
   // True while the log-path field has focus; the key catcher stays blocked
   // so typing/Enter/Escape go to the editor, not to panel actions.
   readonly property bool editorActive: logPathField.activeFocus
+  // True while either dropdown's popup is open; the key catcher stays
+  // blocked so j/k and arrows drive the popup's own list, not the panel
+  // shortcuts — the pattern the shell's dev gallery documents for Dropdown.
+  readonly property bool dropdownOpen: patternDropdown.popupOpen || minutesDropdown.popupOpen
 
   function settingValue(key, fallback) {
     if (root.settings && root.settings[key] !== undefined)
@@ -75,6 +83,13 @@ Panel {
   function choose(patternKey, minutes) {
     chosenPattern = patternKey
     chosenMinutes = minutes
+    // Keep the dropdowns showing the choice. Dropdown.selectCurrent()
+    // assigns its own `value`, which breaks the `value:` binding, so a
+    // later choose() from a keyboard shortcut (1-9) would otherwise
+    // leave the dropdown showing the old value. Every change to the
+    // choice goes through here, so syncing here covers all paths.
+    patternDropdown.value = patternKey
+    minutesDropdown.value = String(minutes)
     // Written back to shell.json so the choice is the default from then on,
     // same pattern as the clock's format cycling.
     var entry = { id: root.moduleName }
@@ -222,7 +237,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editorActive
+      blocked: root.editorActive || root.dropdownOpen
 
       onCloseRequested: root.close()
       onReturnRequested: root.startSession(root.chosenPattern, root.chosenMinutes)
@@ -343,44 +358,43 @@ Panel {
           }
         }
 
-        Flow {
+        // Pattern and duration are shell Dropdowns (qs.Ui): the trigger
+        // shows the current choice, the popup lists every option. Same
+        // options as the old button rows — patterns from patterns.json
+        // plus the built-ins, minutes 5/10/15/20 — and the same state:
+        // choosing writes back to shell.json via choose(), so the pick
+        // is the default from then on. The hint line keeps the old
+        // buttons' tooltip (e.g. "4-4-4-4 — steady focus").
+        Dropdown {
+          id: patternDropdown
           width: parent.width
-          spacing: Style.space(6)
-
-          Repeater {
-            model: root.patternKeys
-
-            Button {
-              required property string modelData
-              readonly property var pat: Model.pattern(modelData, root.resolvedPatterns.map)
-              text: pat.name
-              tooltipText: pat.hint
-              bordered: true
-              selected: root.chosenPattern === modelData
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.choose(modelData, root.chosenMinutes)
-            }
-          }
+          label: "Pattern"
+          fontFamily: root.fontFamily
+          foreground: root.foreground
+          options: root.patternOptions
+          value: root.chosenPattern
+          onChanged: function(v) { root.choose(v, root.chosenMinutes) }
         }
 
-        Flow {
+        Text {
           width: parent.width
-          spacing: Style.space(6)
+          textFormat: Text.PlainText
+          wrapMode: Text.WordWrap
+          text: Model.pattern(root.chosenPattern, root.resolvedPatterns.map).hint
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
 
-          Repeater {
-            model: root.minuteChoices
-
-            Button {
-              required property int modelData
-              text: modelData + " min"
-              bordered: true
-              selected: root.chosenMinutes === modelData
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.choose(root.chosenPattern, modelData)
-            }
-          }
+        Dropdown {
+          id: minutesDropdown
+          width: parent.width
+          label: "Duration"
+          fontFamily: root.fontFamily
+          foreground: root.foreground
+          options: root.minuteOptions
+          value: String(root.chosenMinutes)
+          onChanged: function(v) { root.choose(root.chosenPattern, Number(v)) }
         }
 
         RowLayout {

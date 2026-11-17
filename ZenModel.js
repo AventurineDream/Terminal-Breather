@@ -120,6 +120,30 @@ function resolvePatterns(customRaw) {
   return { map: map, order: order, customs: customs }
 }
 
+// Option lists for the panel dropdowns: { value, label } pairs the shell
+// Dropdown renders (label is what shows, value is what is emitted).
+// Pattern labels come from the resolved map, so a custom pattern shows its
+// own name; minutes render as "5 min". The dropdown's value is the key
+// (pattern) or the minutes as a string, matching what choose() stores.
+function patternOptions(resolved) {
+  var out = []
+  var order = (resolved && resolved.order) || PATTERN_ORDER
+  var map = (resolved && resolved.map) || PATTERNS
+  for (var i = 0; i < order.length; i++) {
+    var p = pattern(order[i], map)
+    out.push({ value: String(order[i]), label: p.name })
+  }
+  return out
+}
+
+function minuteOptions(choices) {
+  var out = []
+  var list = choices || [5, 10, 15, 20]
+  for (var i = 0; i < list.length; i++)
+    out.push({ value: String(list[i]), label: list[i] + " min" })
+  return out
+}
+
 // ---- Tempo ramp. A pattern may carry an optional ramp that scales every
 // phase duration over the first `overSecs` of a session:
 //   "ramp": {"from": 2, "to": 0.5, "overSecs": 60}
