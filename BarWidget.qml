@@ -232,7 +232,14 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(300))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(420))
+    // The cap is a ceiling, not a height: fittedContentHeight returns
+    // min(content, cap), so the panel stays exactly as tall as its
+    // content until it hits the cap. 420 clipped the Begin button and
+    // the shortcut hint below it (measured 54px of overflow on the
+    // default, Settings-collapsed content). 560 matches the shell's
+    // own audio/monitor/dropbox panels and still fits a 768px screen
+    // with room to spare; the expanded Settings section still scrolls.
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
 
     PanelKeyCatcher {
       id: keyCatcher
