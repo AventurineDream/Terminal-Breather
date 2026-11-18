@@ -778,7 +778,10 @@ function paintMandala(id, sx, sy, col, row, spin, fullness, timeMs, clock) {
     if (Math.sin(12 * theta - clock.latticePhase) > 0.35) {
       return { ch: ":", layer: 1 }
     }
-    if (clock.fullness < 0.45) return { ch: ":", layer: 1 }
+    // Dither the breath threshold by Bayer cell so the rings fade
+    // instead of snapping all at once when fullness crosses 0.45.
+    var ringFlip = 0.45 + (BAYER[row & 3][col & 3] / 16 - 0.5) * 0.2
+    if (clock.fullness < ringFlip) return { ch: ":", layer: 1 }
     return { ch: "·", layer: 1 }
   }
   return null
@@ -808,12 +811,14 @@ function gridSpec(id, n, aspect) {
   return { cols: oddCount(2 * reach / a + 1), rows: oddCount(n), disk: disk, aspect: a }
 }
 
-function paintAtmosphere(id, sx, sy) {
+function paintAtmosphere(id, sx, sy, fullness) {
   if (id === "sun" || id === "mercury" || id === "moon") return false
   if (id === "iris" || id === "orbits" || id === "petal" || id === "lattice") return false
   if (id === "saturn" || id === "uranus") return false
+  var f = clamp01(fullness == null ? 1 : fullness)
   var r = Math.sqrt(sx * sx + sy * sy)
-  if (r < 1.01 || r > 1.06) return false
+  // Glow thickens on inhale; at fullness 1 the band matches the old edge.
+  if (r < 1.01 || r > 1.03 + 0.03 * f) return false
   return sy > -0.05
 }
 
@@ -876,7 +881,7 @@ function frame(id, opts) {
         if (!painted && chosen === "sun" && prominence(sx, sy, timeMs, fullness, clock)) {
           painted = { ch: "+", layer: 2 }
         }
-        if (!painted && paintAtmosphere(chosen, sx, sy)) painted = { ch: "·", layer: 1 }
+        if (!painted && paintAtmosphere(chosen, sx, sy, fullness)) painted = { ch: "·", layer: 1 }
       }
       if (painted && painted.ch && painted.ch !== " ") put(grid, cols, col, row, painted.ch, painted.layer)
     }

@@ -10,7 +10,7 @@ const src = fs
   .replace(/^\.pragma library\n/, "");
 const Art = new Function(
   src +
-    "\nreturn { FIGURES, frame, composite, resolveAnimation, visualScale, ids, cycle, animation, indexOf, maxCells, paintBody, paintMandala, ringGlyph, ringTilt, prominence, project, orbitMoons, idSeed, motionClock, spinOf, periodOf };"
+    "\nreturn { FIGURES, frame, composite, resolveAnimation, visualScale, ids, cycle, animation, indexOf, maxCells, paintBody, paintMandala, paintAtmosphere, ringGlyph, ringTilt, prominence, project, orbitMoons, idSeed, motionClock, spinOf, periodOf };"
 )();
 
 let pass = 0;
@@ -398,6 +398,26 @@ check(
     return !!(shut && !open);
   })()
 );
+check("lattice ring flip is dithered, not a snap", (() => {
+  // One ring point, all 16 Bayer cells: the ":" count should fall
+  // gradually as fullness crosses 0.45, not all at once.
+  const sx = Math.cos(Math.PI / 12) * 0.44;
+  const sy = Math.sin(Math.PI / 12) * 0.44;
+  function colonCount(fullness) {
+    let n = 0;
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 4; col++) {
+        const hit = Art.paintMandala("lattice", sx, sy, col, row, 0, fullness, 0, clockFor(0, fullness));
+        if (hit && hit.ch === ":") n++;
+      }
+    }
+    return n;
+  }
+  const low = colonCount(0.4);
+  const mid = colonCount(0.45);
+  const high = colonCount(0.5);
+  return low > mid && mid > high && mid > 0 && mid < 16;
+})());
 check("petal sways without breaking eightfold", mandalaDelta("petal", 0.3, 0, 2500, 1, 0.04) >= 2 && symmetryOk("petal", 2500, 0.8));
 
 check("orbits moons ride every track", (() => {
@@ -468,6 +488,15 @@ check("sun prominences grow on inhale", (() => {
     return maxR;
   }
   return maxReach(1) > maxReach(0) + 0.03;
+})());
+
+check("atmosphere glow thickens on inhale", (() => {
+  // Outer edge of the glow band: present at fullness 1, gone at 0.
+  const outer = Art.paintAtmosphere("earth", 0, 1.05, 1);
+  const gone = Art.paintAtmosphere("earth", 0, 1.05, 0);
+  // Inner edge stays put so the glow never vanishes outright.
+  const inner = Art.paintAtmosphere("earth", 0, 1.02, 0);
+  return outer && !gone && inner;
 })());
 
 console.log(`PlanetArt tests: ${pass} passed${process.exitCode ? " (WITH FAILURES)" : ""}`);
