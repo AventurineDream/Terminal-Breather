@@ -5,9 +5,12 @@
 // accent layers for the feature that names the body.
 //
 // Palette is the mossglass dark-theme set, so the figures sit on a near-black
-// ground without a second color system. Mandalas are 4-, 8-, or 12-fold
-// wheels and apertures — orbital hardware, not star polygons. No 5-fold and
-// no 6-fold star is constructed. Rings are filled annuli, not stroked ellipses.
+// ground without a second color system. Motion is a measured spin plus a
+// 5–15s secondary detail, both slow enough not to strobe on the overlay's
+// 20fps clock. Fullness changes that detail, not only the figure's scale.
+// Mandalas are 4-, 8-, or 12-fold wheels and apertures — orbital hardware,
+// not star polygons. No 5-fold and no 6-fold star is constructed. Rings are
+// filled annuli, not stroked ellipses.
 
 var RAMP = "·:+*#@"
 var BAYER = [
@@ -245,22 +248,61 @@ function colorsFor(id) {
   return ["#D9E1D7", "#A9D7C9", "#E9D29D"]
 }
 
+/**
+ * Return milliseconds per turn for a figure id (mandala speed by default).
+ * At 20fps, each step stays below a cell on the usual grid. Moon rocks instead.
+ */
 function periodOf(id) {
-  if (id === "jupiter") return 34000
-  if (id === "saturn") return 42000
-  if (id === "neptune") return 38000
-  if (id === "earth") return 52000
-  if (id === "mars") return 56000
-  if (id === "venus") return 74000
-  if (id === "uranus") return 64000
-  if (id === "mercury") return 80000
-  if (id === "sun") return 90000
+  if (id === "jupiter") return 22000
+  if (id === "saturn") return 24000
+  if (id === "neptune") return 24000
+  if (id === "earth") return 26000
+  if (id === "mars") return 28000
+  if (id === "venus") return 30000
+  if (id === "uranus") return 32000
+  if (id === "mercury") return 28000
+  if (id === "sun") return 28000
   if (id === "moon") return 70000
-  return 48000
+  if (id === "orbits") return 14000
+  return 24000
 }
 
 function spinOf(id, timeMs) {
   return (timeMs / periodOf(id)) * Math.PI * 2
+}
+
+/**
+ * Precompute secondary motion for elapsed timeMs (milliseconds) and fullness
+ * (0..1, default 1). Returns one frame-local clock; no external state changes.
+ * Oscillators repeat in 5–15s; noise coordinates drift without reset seams.
+ * Moon's phase wraps every 12s so the rock returns instead of walking.
+ */
+function motionClock(timeMs, fullness) {
+  var t = timeMs || 0
+  var f = clamp01(fullness == null ? 1 : fullness)
+  var libPhase = (t % 12000) / 12000
+  var petalPulse = Math.sin(t / 1600)
+  return {
+    fullness: f,
+    sunBoil: t / 8000,
+    mercGrain: t / 1600,
+    marsDrift: t / 1700,
+    jupUnd: Math.sin(t / 1500),
+    uranusBreath: Math.sin(t / 1700),
+    nepDrift: t / 1500,
+    venusDrift: t / 8000,
+    earthDrift: t / 8000,
+    petalSway: petalPulse * 0.08,
+    petalPulse: petalPulse,
+    latticePhase: t / 1400,
+    latticeGleam: Math.sin(t / 1400),
+    moonLib: Math.sin(libPhase * Math.PI * 2),
+    irisGap: 0.032 + 0.006 * Math.sin(t / 1600),
+    prom0: Math.sin(t / 1800),
+    prom1: Math.sin(t / 1800 + 1),
+    prom2: Math.sin(t / 1800 + 2),
+    prom3: Math.sin(t / 1800 + 3)
+  }
 }
 
 function jupZone(deg) {
@@ -345,18 +387,26 @@ function project(id, sx, sy, spin) {
   }
 }
 
-function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
+/**
+ * Sample a body at normalized sx/sy, Bayer col/row, and spin (radians).
+ * timeMs is milliseconds, seed fixes the texture, fullness is 0..1; clock
+ * optionally shares frame constants. Returns ink or null outside the disk.
+ */
+function paintBody(id, sx, sy, col, row, spin, timeMs, seed, fullness, clock) {
   var p = project(id, sx, sy, spin)
   if (!p) return null
+  if (!clock) clock = motionClock(timeMs, fullness)
   var t = p.light
   var layer = 0
   var lat = p.lat
   var lon = p.lon
+  var f = clock.fullness
 
   if (id === "sun") {
-    var boil = timeMs / 8000
+    var boil = clock.sunBoil
     var g = fbm(lon * 5 + boil, lat * 5 + boil * 0.4, seed, 4)
-    t = Math.pow(p.nz, 0.42) * (0.48 + 0.52 * g)
+    var heat = 0.86 + 0.14 * f
+    t = Math.pow(p.nz, 0.42) * (0.48 + 0.52 * g) * heat
     var s
     for (s = 0; s < 3; s++) {
       var slat = (hash2(s, 8, seed) - 0.5) * 1.2
@@ -368,54 +418,63 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     }
     if (t > 0.82) layer = 1
   } else if (id === "mercury") {
+    // Craters stay on body longitude. Only the grain field slides.
     var cr = craterField(lat, lon, seed, 16, true)
-    var grain = fbm(lon * 6, lat * 6, seed, 2)
-    t = p.light * (0.58 + 0.22 * grain + cr.shade + cr.bright)
-    if (cr.bright > 0.12) layer = 1
+    var grain = fbm(lon * 6 + clock.mercGrain, lat * 6 + clock.mercGrain * 0.3, seed, 2)
+    var contrast = 0.70 + 0.30 * f
+    var rayBright = cr.bright * (0.30 + 0.70 * f)
+    t = p.light * contrast * (0.62 + 0.18 * grain + cr.shade + rayBright)
+    if (rayBright > 0.08) layer = 1
   } else if (id === "venus") {
-    var cloud = fbm(lon * 1.3 + timeMs / 70000, lat * 1.7, seed + 4, 3)
-    t = p.light * (0.74 + 0.08 * (cloud - 0.5))
+    var cloud = fbm(lon * 1.3 + clock.venusDrift, lat * 1.7, seed + 4, 3)
+    var tone = 0.60 + 0.22 * f
+    t = p.light * (tone + 0.08 * (cloud - 0.5))
     var armLon = wrap(lon)
     var arm = Math.abs(Math.abs(lat) - Math.max(0, armLon) * 0.48)
     if (arm < 0.07 && lat > -0.08 && lat < 0.52 && armLon > -0.1 && armLon < 1.25) {
       layer = 1
-      t = p.light * 0.96
+      t = p.light * (0.78 + 0.18 * f)
     }
   } else if (id === "earth") {
     var tile = mapChar(EARTH, lat, lon)
     var ice = tile === "*" || Math.abs(lat) > 1.38
     var land = tile === "#"
-    var deck = curl(lon * 0.7 + timeMs / 42000, lat * 0.55, seed)
+    var deck = curl(lon * 0.7 + clock.earthDrift, lat * 0.55, seed)
     var spec = (p.nx - HX) * (p.nx - HX) + (p.ny - HY) * (p.ny - HY) + (p.nz - HZ) * (p.nz - HZ)
-    if (deck > 0.76 && p.nz > 0.25) {
+    var cloudCut = 0.82 - 0.10 * f
+    var cloudTone = 0.66 + 0.26 * f
+    if (deck > cloudCut && p.nz > 0.25) {
       layer = 2
-      t = p.light * (0.84 + 0.14 * deck)
+      t = p.light * (cloudTone + 0.08 * deck)
     } else if (ice) {
       layer = 2
-      t = p.light * 0.94
+      t = p.light * (0.86 + 0.08 * f)
     } else if (land) {
       layer = 1
-      t = p.light * (0.70 + 0.12 * fbm(lon * 3, lat * 3, seed, 2))
+      t = p.light * (0.62 + 0.12 * f + 0.10 * fbm(lon * 3, lat * 3, seed, 2))
     } else {
       layer = 0
-      t = p.light * (0.40 + 0.08 * fbm(lon * 2, lat * 2, seed + 2, 2))
+      t = p.light * (0.32 + 0.12 * f + 0.08 * fbm(lon * 2, lat * 2, seed + 2, 2))
       if (spec < 0.006) {
         layer = 2
         t = 0.92
       }
     }
   } else if (id === "moon") {
-    var lib = Math.sin(timeMs / 22000) * 0.12
+    // lon0, not lon: spin would walk the maria around the sphere.
+    // ±0.22 rad keeps the rock on one face; the phase is one breath.
+    var lib = clock.moonLib * 0.22
     var mlon = p.lon0 + lib
     var mare = hitList(lat, mlon, MARIA)
     var craters = craterField(lat, mlon, seed, 9, false)
     var high = fbm(mlon * 4, lat * 4, seed, 2)
-    t = p.light * ((mare ? 0.20 : 0.68) + 0.06 * high + craters.shade * 0.7 + craters.bright * 0.35)
+    var rayGain = 0.48 + 0.52 * f
+    t = p.light * ((mare ? 0.20 : 0.50 + 0.20 * f) + 0.06 * high + craters.shade * 0.7 + craters.bright * 0.35)
     if (!mare && craters.bright > 0.08) layer = 1
     var tycho = angDist(lat, mlon, -0.72, -0.20)
     if (tycho < 0.05) {
       layer = 1
-      t = p.light * 0.92
+      t = p.light * (0.72 + 0.20 * f)
     } else if (tycho < 0.48) {
       var tang = Math.atan2(lat + 0.72, wrap(mlon + 0.20))
       var ray = Math.abs(wrap(tang - 0.4))
@@ -423,12 +482,14 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
       var ray3 = Math.abs(wrap(tang + 1.2))
       if (ray < 0.045 || ray2 < 0.04 || ray3 < 0.05) {
         layer = 1
-        t = Math.max(t, p.light * 0.78)
+        t = Math.max(t, p.light * (0.50 + 0.36 * rayGain))
       }
     }
   } else if (id === "mars") {
-    var dust = fbm(lon * 2.2, lat * 2.2, seed, 3)
-    t = p.light * (0.60 + 0.14 * dust)
+    // Dust slides on its own clock. Wedge and cap stay on body longitude.
+    var dust = fbm(lon * 2.2 + clock.marsDrift, lat * 2.2 + clock.marsDrift * 0.25, seed, 3)
+    var dustAmp = 0.04 + 0.18 * f
+    t = p.light * ((0.50 + 0.14 * f) + dustAmp * dust)
     if (lat > 1.18) {
       layer = 1
       t = p.light * 0.92
@@ -441,23 +502,26 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
     }
   } else if (id === "jupiter") {
     var deg = lat * 180 / Math.PI
-    var zone = clamp01(jupZone(deg) + (fbm(lon * 1.8, lat * 4, seed, 2) - 0.5) * 0.10)
-    var dlat = lat + 0.38
-    var dlon = wrap(lon - 0.50)
+    var und = clock.jupUnd * (2.6 + 1.4 * Math.sin(lon * 2))
+    var beltContrast = 0.50 + 0.50 * f
+    var zone = clamp01(jupZone(deg + und) + (fbm(lon * 1.8 + clock.jupUnd * 0.45, lat * 4, seed, 2) - 0.5) * 0.10)
+    var dlat = lat + 0.38 + clock.jupUnd * 0.03
+    var dlon = wrap(lon - 0.50 - clock.jupUnd * 0.08)
     var oval = (dlat / 0.22) * (dlat / 0.22) + (dlon / 0.46) * (dlon / 0.46)
     if (oval < 1 && p.nz > 0.28) {
       layer = 2
       t = p.light * (oval > 0.78 ? 0.46 : 0.86)
     } else if (zone < 0.36) {
       layer = 1
-      t = p.light * (0.20 + 0.16 * zone)
+      t = p.light * (0.36 - 0.18 * beltContrast + 0.10 * zone)
     } else {
       layer = 0
-      t = p.light * (0.58 + 0.34 * zone)
+      t = p.light * (0.40 + 0.42 * beltContrast * zone)
     }
   } else if (id === "saturn") {
     var sdeg = lat * 180 / Math.PI
-    var band = 0.70 + 0.10 * Math.sin(sdeg * 0.11)
+    // A quiet longitudinal wave so the turn reads; the bands stay pale.
+    var band = 0.64 + 0.08 * f + 0.08 * Math.sin(sdeg * 0.11) + 0.08 * Math.sin(lon * 2)
     t = p.light * band
     if (Math.abs(p.sy - 0.05) < 0.045 && p.r2 < 0.96) {
       layer = 2
@@ -466,22 +530,25 @@ function paintBody(id, sx, sy, col, row, spin, timeMs, seed) {
       layer = 2
     }
   } else if (id === "uranus") {
-    var hood = p.ny > 0.28 ? (p.ny - 0.28) * 1.15 : 0
+    var hoodEdge = 0.36 - 0.14 * f + 0.10 * clock.uranusBreath
+    var hood = 0
+    if (p.ny > hoodEdge) hood = 0.10 + (p.ny - hoodEdge) * (0.50 + 0.60 * f)
     var faint = fbm(lon * 1.1, lat * 1.6, seed, 2)
-    t = p.light * (0.66 + hood + 0.04 * (faint - 0.5))
-    if (hood > 0.16) layer = 1
+    t = p.light * (0.62 + hood + 0.06 * (faint - 0.5) + 0.09 * Math.sin(lon * 2))
+    if (hood > 0.14) layer = 1
   } else if (id === "neptune") {
     var ndeg = lat * 180 / Math.PI
-    t = p.light * (0.52 + 0.05 * Math.sin(ndeg * 0.16))
+    var nc = fbm(lon * 3.2 + clock.nepDrift, lat * 4.2 + clock.nepDrift * 0.35, seed + 6, 3)
+    var cloudTone = 0.50 + 0.30 * f
+    t = p.light * (0.44 + 0.14 * f + 0.04 * Math.sin(ndeg * 0.16) + 0.08 * (nc - 0.5))
     var spot = ellipse(lat, lon, -0.24, 0.20, 0.24, 0.42)
     if (spot) {
       layer = 2
       t = p.light * 0.42
     }
-    var nc = fbm(lon * 3.2, lat * 4.2, seed + 6, 3)
-    if (!spot && nc > 0.86 && Math.abs(lat) < 0.7 && p.nz > 0.4) {
+    if (!spot && nc > 0.80 && Math.abs(lat) < 0.7 && p.nz > 0.4) {
       layer = 1
-      t = p.light * 0.72
+      t = p.light * cloudTone
     }
     if (ellipse(lat, lon, -0.46, 0.32, 0.04, 0.06)) {
       layer = 1
@@ -498,32 +565,61 @@ function stampAt(grid, cols, rows, col, row, ch, layer) {
   grid[row * cols + col] = { ch: ch, layer: layer }
 }
 
-function ringGlyph(id, sx, sy) {
-  var tilt = id === "saturn" ? 0.34 : 0.13
+/**
+ * Return the ring's vertical/horizontal ratio for id and fullness (0..1).
+ * Missing fullness means fully inhaled; no external state changes.
+ */
+function ringTilt(id, fullness) {
+  var f = clamp01(fullness == null ? 1 : fullness)
+  // Inhale opens the ring a little. sy = 0 does not use tilt, so the
+  // Cassini radii stay put for the gap check.
+  if (id === "saturn") return 0.26 + 0.12 * f
+  if (id === "uranus") return 0.09 + 0.08 * f
+  return 0.2
+}
+
+/**
+ * Sample a ring at normalized sx/sy, timeMs (milliseconds), fullness (0..1).
+ * Optional tilt is the precomputed axis ratio. Returns glyph/layer or null
+ * outside the filled annuli, including the Cassini division.
+ */
+function ringGlyph(id, sx, sy, timeMs, fullness, tilt) {
+  if (tilt == null) tilt = ringTilt(id, fullness)
   var rr = Math.sqrt(sx * sx + (sy / tilt) * (sy / tilt))
   if (id === "uranus") {
     if (rr >= 1.06 && rr < 1.48) return { ch: "-", layer: 2 }
     return null
   }
-  if (rr >= 1.22 && rr < 1.40) return { ch: ":", layer: 2 }
-  if (rr >= 1.40 && rr < 1.72) return { ch: "=", layer: 1 }
-  if (rr >= 1.86 && rr < 2.24) return { ch: "-", layer: 0 }
+  // 1.72–1.86 is Cassini: empty at every phase. Shimmer only swaps a
+  // glyph inside a filled annulus, so the gap cannot close.
+  var shim = Math.sin(Math.atan2(sy, sx) * 2 + (timeMs || 0) / 1800)
+  if (rr >= 1.22 && rr < 1.40) return { ch: shim > 0.4 ? "·" : ":", layer: 2 }
+  if (rr >= 1.40 && rr < 1.72) return { ch: shim > 0.6 ? "+" : "=", layer: 1 }
+  if (rr >= 1.86 && rr < 2.24) return { ch: shim < -0.6 ? "·" : "-", layer: 0 }
   if (rr >= 2.28 && rr < 2.36) return { ch: "·", layer: 2 }
   return null
 }
 
-function stampRings(grid, id, cols, rows, cx, cy, disk, aspect) {
+/**
+ * Stamp visible rings into grid (mutated), measured in cols/rows cells.
+ * cx/cy and disk are cell coordinates/radius; aspect is cell width/height.
+ * timeMs is milliseconds; fullness is 0..1. Back rings stay behind the disk.
+ */
+function stampRings(grid, id, cols, rows, cx, cy, disk, aspect, timeMs, fullness) {
   if (id !== "saturn" && id !== "uranus") return
   var flat = id === "saturn" ? 0.90 : 1
+  var tilt = ringTilt(id, fullness)
   var row
   var col
   for (row = 0; row < rows; row++) {
     for (col = 0; col < cols; col++) {
       var sx = (col - cx) * aspect / disk
       var sy = (cy - row) / disk
-      var glyph = ringGlyph(id, sx, sy)
+      var glyph = ringGlyph(id, sx, sy, timeMs, fullness, tilt)
       if (!glyph) continue
       var onDisk = sx * sx + (sy / flat) * (sy / flat) <= 1.01
+      // Far side (sy > 0) hides Saturn's ring; the near side stamps over
+      // the body. Uranus is drawn only off the disk.
       if (id === "uranus") {
         if (onDisk) continue
       } else if (onDisk && sy > 0) {
@@ -534,16 +630,30 @@ function stampRings(grid, id, cols, rows, cx, cy, disk, aspect) {
   }
 }
 
-function prominence(sx, sy, timeMs) {
+/**
+ * Test a normalized sx/sy point against the Sun's prominence arches.
+ * timeMs is milliseconds, fullness is 0..1; optional clock shares constants.
+ * Returns a boolean without changing state.
+ */
+function prominence(sx, sy, timeMs, fullness, clock) {
+  if (!clock) clock = motionClock(timeMs, fullness)
+  var lift = 0.035 + 0.09 * clock.fullness
+  // Include the whole stroke even when the exhaled arch is shortest.
+  var reach = 1.03 + lift + 0.018
   var r = Math.sqrt(sx * sx + sy * sy)
-  if (r < 1.02 || r > 1.18) return false
+  if (r < 1.02 || r > reach) return false
   var ang = Math.atan2(sy, sx)
   var k
+  var wobble
   for (k = 0; k < 4; k++) {
-    var base = -2.4 + k * 1.55 + Math.sin(timeMs / 15000 + k) * 0.12
+    if (k === 0) wobble = clock.prom0
+    else if (k === 1) wobble = clock.prom1
+    else if (k === 2) wobble = clock.prom2
+    else wobble = clock.prom3
+    var base = -2.4 + k * 1.55 + wobble * 0.16
     var delta = Math.abs(wrap(ang - base))
     if (delta > 0.30) continue
-    var arch = 1.035 + 0.09 * Math.sin((delta / 0.30) * Math.PI)
+    var arch = 1.03 + lift * Math.sin((delta / 0.30) * Math.PI)
     if (Math.abs(r - arch) < 0.018) return true
   }
   return false
@@ -561,57 +671,96 @@ function spokeGlyph(theta) {
   return "\\"
 }
 
-function paintMandala(id, sx, sy, col, row, spin, fullness) {
+/**
+ * Return seven moon positions/radii in normalized figure coordinates.
+ * spin is radians, fullness is 0..1; all moons stay on their three tracks.
+ */
+function orbitMoons(spin, fullness) {
+  var rings = [0.28, 0.54, 0.82]
+  var counts = [1, 2, 4]
+  var speeds = [1.15, 1.0, 0.72]
+  var moonR = 0.036 + 0.022 * clamp01(fullness == null ? 1 : fullness)
+  var out = []
+  var k
+  var m
+  for (k = 0; k < rings.length; k++) {
+    for (m = 0; m < counts[k]; m++) {
+      var ang = spin * speeds[k] + m * (Math.PI * 2 / counts[k])
+      out.push({
+        x: Math.cos(ang) * rings[k],
+        y: Math.sin(ang) * rings[k],
+        r: moonR,
+        track: rings[k]
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Sample a mandala at normalized sx/sy and cell col/row.
+ * spin is radians, fullness is 0..1, timeMs is milliseconds; optional clock
+ * shares frame constants. Returns glyph/layer or null outside the ink.
+ */
+function paintMandala(id, sx, sy, col, row, spin, fullness, timeMs, clock) {
+  if (!clock) clock = motionClock(timeMs, fullness)
   var r = Math.sqrt(sx * sx + sy * sy)
   var theta = Math.atan2(sy, sx) + spin
   if (id === "iris") {
-    var pupil = 0.07 + 0.44 * clamp01(fullness)
+    var pupil = 0.07 + 0.44 * clock.fullness
     if (r > 0.98 || r < pupil) return null
     if (r > 0.90) return { ch: "+", layer: 1 }
     var sector = Math.PI / 4
     var a = theta % sector
     if (a < 0) a += sector
     var edge = Math.min(a, sector - a)
-    if (r > pupil + 0.08 && edge < 0.032) return null
+    // Same gap on every blade, so the breath does not break eightfold.
+    if (r > pupil + 0.08 && edge < clock.irisGap) return null
     if (r < pupil + 0.04 || a < 0.09) return { ch: "+", layer: 2 }
     return { ch: ":", layer: 0 }
   }
   if (id === "orbits") {
+    var moons = clock.moons
+    if (!moons) moons = orbitMoons(spin, clock.fullness)
+    var i
+    for (i = 0; i < moons.length; i++) {
+      var mx = moons[i].x
+      var my = moons[i].y
+      var md = Math.sqrt((sx - mx) * (sx - mx) + (sy - my) * (sy - my))
+      var moonR = moons[i].r
+      if (md < moonR) return { ch: md < moonR * 0.5 ? "o" : "+", layer: 2 }
+    }
     var rings = [0.28, 0.54, 0.82]
-    var moons = [1, 2, 4]
-    var speeds = [1.1, 0.62, 0.34]
     var k
     for (k = 0; k < rings.length; k++) {
       if (Math.abs(r - rings[k]) < 0.026) return { ch: "·", layer: 1 }
-      var m
-      for (m = 0; m < moons[k]; m++) {
-        var ang = spin * speeds[k] + m * (Math.PI * 2 / moons[k])
-        var mx = Math.cos(ang) * rings[k]
-        var my = Math.sin(ang) * rings[k]
-        var md = Math.sqrt((sx - mx) * (sx - mx) + (sy - my) * (sy - my))
-        if (md < 0.055) return { ch: md < 0.028 ? "o" : "+", layer: 2 }
-      }
     }
-    if (r < 0.06) return { ch: "+", layer: 0 }
+    if (r < 0.06 + 0.05 * clock.fullness) return { ch: "+", layer: 0 }
     return null
   }
   if (id === "petal") {
-    var fold = Math.cos(8 * theta)
-    var lobe = 0.20 + 0.68 * Math.pow(Math.max(0, fold), 0.24)
+    // Global rock plus a scalar pulse: both are eightfold at every phase.
+    var posed = theta + clock.petalSway
+    var fold = Math.cos(8 * posed)
+    var bloom = 0.86 + 0.14 * clock.fullness
+    var pulse = 1 + 0.045 * clock.petalPulse
+    var lobe = (0.20 + 0.68 * Math.pow(Math.max(0, fold), 0.24)) * bloom * pulse
     if (r > lobe || r > 0.96) return null
     if (r < 0.08) return { ch: "+", layer: 2 }
     if (lobe - r < 0.03) return { ch: "+", layer: 1 }
     var step = Math.PI / 4
-    var center = Math.round(theta / step) * step
-    if (Math.abs(wrap(theta - center)) < 0.045 && r > 0.18) return { ch: ":", layer: 2 }
+    var center = Math.round(posed / step) * step
+    if (Math.abs(wrap(posed - center)) < 0.045 && r > 0.18) return { ch: ":", layer: 2 }
     return { ch: ":", layer: 0 }
   }
   var spokeStep = Math.PI * 2 / 12
   var spokeN = Math.round(theta / spokeStep)
   var spokeAngle = spokeN * spokeStep
   var delta = Math.abs(wrap(theta - spokeAngle))
-  var onSpoke = delta * Math.max(r, 0.10) < 0.026 && r < 0.92 && r > 0.08
-  var ringsAt = [0.22 + 0.04 * clamp01(fullness), 0.44, 0.66, 0.86]
+  var gleam = clock.latticeGleam
+  var spokeWidth = 0.026 + 0.006 * gleam
+  var onSpoke = delta * Math.max(r, 0.10) < spokeWidth && r < 0.92 && r > 0.08
+  var ringsAt = [0.22 + 0.04 * clock.fullness, 0.44, 0.66, 0.86]
   var onRing = false
   var q
   for (q = 0; q < ringsAt.length; q++) {
@@ -619,8 +768,22 @@ function paintMandala(id, sx, sy, col, row, spin, fullness) {
   }
   if (r > 0.96) return null
   if (onSpoke && onRing) return { ch: "o", layer: 2 }
-  if (onSpoke) return { ch: spokeGlyph(spokeAngle), layer: 0 }
-  if (onRing) return { ch: "·", layer: 1 }
+  if (onSpoke) {
+    var wave = Math.sin(r * 10 - clock.latticePhase)
+    if (wave > 0.2) return { ch: "·", layer: 1 }
+    return { ch: spokeGlyph(spokeAngle), layer: 0 }
+  }
+  if (onRing) {
+    // 12 * theta keeps the twinkle on the same fold as the spokes.
+    if (Math.sin(12 * theta - clock.latticePhase) > 0.35) {
+      return { ch: ":", layer: 1 }
+    }
+    // Dither the breath threshold by Bayer cell so the rings fade
+    // instead of snapping all at once when fullness crosses 0.45.
+    var ringFlip = 0.45 + (BAYER[row & 3][col & 3] / 16 - 0.5) * 0.2
+    if (clock.fullness < ringFlip) return { ch: ":", layer: 1 }
+    return { ch: "·", layer: 1 }
+  }
   return null
 }
 
@@ -648,12 +811,14 @@ function gridSpec(id, n, aspect) {
   return { cols: oddCount(2 * reach / a + 1), rows: oddCount(n), disk: disk, aspect: a }
 }
 
-function paintAtmosphere(id, sx, sy) {
+function paintAtmosphere(id, sx, sy, fullness) {
   if (id === "sun" || id === "mercury" || id === "moon") return false
   if (id === "iris" || id === "orbits" || id === "petal" || id === "lattice") return false
   if (id === "saturn" || id === "uranus") return false
+  var f = clamp01(fullness == null ? 1 : fullness)
   var r = Math.sqrt(sx * sx + sy * sy)
-  if (r < 1.01 || r > 1.06) return false
+  // Glow thickens on inhale; at fullness 1 the band matches the old edge.
+  if (r < 1.01 || r > 1.03 + 0.03 * f) return false
   return sy > -0.05
 }
 
@@ -669,6 +834,18 @@ function visualScale(fullness) {
   return 0.42 + 0.58 * clamp01(fullness == null ? 1 : fullness)
 }
 
+/**
+ * Draw one figure into colored text layers.
+ * @param {string} id figure id; unknown ids fall back to earth
+ * @param {object} [opts]
+ * @param {number} [opts.cells] odd row count; even values are decremented
+ * @param {number} [opts.maxCells] used when cells is omitted
+ * @param {number} [opts.stagePx] pixel stage, only if cells and maxCells are omitted
+ * @param {number} [opts.aspect] cell width/height; outside (0.3, 0.85) uses 0.5
+ * @param {number} [opts.timeMs] animation clock in milliseconds
+ * @param {number} [opts.fullness] breath 0..1; drives scale and in-figure detail
+ * @returns {{id:string,name:string,kind:string,cols:number,rows:number,disk:number,aspect:number,scale:number,layers:Array<{color:string,text:string}>}}
+ */
 function frame(id, opts) {
   opts = opts || {}
   var chosen = BY_ID[id] ? id : "earth"
@@ -685,6 +862,8 @@ function frame(id, opts) {
   var fullness = clamp01(opts.fullness == null ? 1 : opts.fullness)
   var spin = spinOf(chosen, timeMs)
   var seed = idSeed(chosen)
+  var clock = motionClock(timeMs, fullness)
+  if (chosen === "orbits") clock.moons = orbitMoons(spin, fullness)
   var grid = blank(cols, rows)
   var cx = (cols - 1) / 2
   var cy = (rows - 1) / 2
@@ -696,18 +875,18 @@ function frame(id, opts) {
       var sy = (cy - row) / disk
       var painted = null
       if (spec.kind === "mandala") {
-        painted = paintMandala(chosen, sx, sy, col, row, spin, fullness)
+        painted = paintMandala(chosen, sx, sy, col, row, spin, fullness, timeMs, clock)
       } else {
-        painted = paintBody(chosen, sx, sy, col, row, spin, timeMs, seed)
-        if (!painted && chosen === "sun" && prominence(sx, sy, timeMs)) {
+        painted = paintBody(chosen, sx, sy, col, row, spin, timeMs, seed, fullness, clock)
+        if (!painted && chosen === "sun" && prominence(sx, sy, timeMs, fullness, clock)) {
           painted = { ch: "+", layer: 2 }
         }
-        if (!painted && paintAtmosphere(chosen, sx, sy)) painted = { ch: "·", layer: 1 }
+        if (!painted && paintAtmosphere(chosen, sx, sy, fullness)) painted = { ch: "·", layer: 1 }
       }
       if (painted && painted.ch && painted.ch !== " ") put(grid, cols, col, row, painted.ch, painted.layer)
     }
   }
-  if (chosen === "saturn" || chosen === "uranus") stampRings(grid, chosen, cols, rows, cx, cy, disk, aspect)
+  if (chosen === "saturn" || chosen === "uranus") stampRings(grid, chosen, cols, rows, cx, cy, disk, aspect, timeMs, fullness)
   return {
     id: chosen,
     name: spec.name,
