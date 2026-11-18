@@ -158,6 +158,13 @@ python3 test/tb-guide.test.py
 
 The QML layer (FileView timing, panel wiring) is reviewed by diff and verified on a live Omarchy shell.
 
+## Changelog
+
+### 0.8.2
+
+- Figures move within a breath: faster, measured rotation, planet-specific secondary motion, and details that respond to inhale/exhale beyond the overall scale.
+- Petal sways, Lattice shimmers, and Orbits moons travel visibly along their tracks. The figure roster, three-layer palettes, stipple style, and breathing clock are unchanged.
+
 ## License
 
 MIT
