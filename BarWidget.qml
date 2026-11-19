@@ -12,8 +12,8 @@ import "PlanetArt.js" as Art
 // the habit loop lives in the corner of the eye, the practice fullscreen.
 Panel {
   id: root
-  moduleName: "luotao.zen"
-  ipcTarget: "luotao.zen"
+  moduleName: "aven.terminal-breather"
+  ipcTarget: "aven.terminal-breather"
   manageIpc: false
 
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
@@ -117,9 +117,9 @@ Panel {
       animation: chosenAnimation
     })
     if (root.bar && root.bar.shell && typeof root.bar.shell.summon === "function")
-      root.bar.shell.summon("luotao.zen", payload)
+      root.bar.shell.summon("aven.terminal-breather", payload)
     else
-      Quickshell.execDetached(["omarchy-shell", "shell", "summon", "luotao.zen", payload])
+      Quickshell.execDetached(["omarchy-shell", "shell", "summon", "aven.terminal-breather", payload])
     root.close()
   }
 

@@ -36,8 +36,8 @@ exit 0
 """
 
 # shell.json shape the real jq query expects: an object somewhere with
-# .id == "luotao.zen", .pattern and .minutes.
-SHELL_JSON = [{"id": "luotao.zen", "pattern": "478", "minutes": 10}]
+# .id == "aven.terminal-breather", .pattern and .minutes.
+SHELL_JSON = [{"id": "aven.terminal-breather", "pattern": "478", "minutes": 10}]
 
 pass_count = 0
 
@@ -145,7 +145,7 @@ env = TbEnv()
 rc, out, err, guide, shell = env.run("--gui", "478", "10")
 check("--gui exits 0", rc == 0)
 check("--gui summons the overlay",
-      len(shell) == 1 and shell[0].startswith("shell summon luotao.zen "))
+      len(shell) == 1 and shell[0].startswith("shell summon aven.terminal-breather "))
 payload = json.loads(shell[0].split(" ", 3)[3])
 check("--gui payload carries pattern + minutes",
       payload == {"pattern": "478", "minutes": 10})

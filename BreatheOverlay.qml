@@ -15,8 +15,8 @@ import "PlanetArt.js" as Art
 // the circles stay in sync across screens.
 //
 // Summon with:
-//   omarchy-shell shell summon luotao.zen '{}'
-//   omarchy-shell shell summon luotao.zen '{"pattern": "478", "minutes": 5}'
+//   omarchy-shell shell summon aven.terminal-breather '{}'
+//   omarchy-shell shell summon aven.terminal-breather '{"pattern": "478", "minutes": 5}'
 // Patterns: "box" (4-4-4-4), "478" (4-7-8), "coherent" (5.5 / 5.5),
 // plus custom patterns from ~/.config/omarchy/zen/patterns.json.
 //
@@ -197,7 +197,7 @@ Item {
     root.opened = false
     root.restoreDnd()
     if (root.shell && typeof root.shell.hide === "function")
-      root.shell.hide((root.manifest && root.manifest.id) || "luotao.zen")
+      root.shell.hide((root.manifest && root.manifest.id) || "aven.terminal-breather")
   }
 
   function toggle() {

@@ -40,7 +40,7 @@ omarchy plugin add https://github.com/AventurineDream/Terminal-Breather.git --en
 Remove the plugin with:
 
 ```bash
-omarchy plugin remove luotao.zen
+omarchy plugin remove aven.terminal-breather
 ```
 
 ## Start a session
@@ -50,10 +50,10 @@ Click the bar icon to choose a pattern, duration, and figure. Middle-click start
 From a terminal:
 
 ```bash
-omarchy-shell luotao.zen start 478 5  # 4–7–8 breathing for five minutes
-omarchy-shell luotao.zen status       # current streak and today's practice
+omarchy-shell aven.terminal-breather start 478 5  # 4–7–8 breathing for five minutes
+omarchy-shell aven.terminal-breather status       # current streak and today's practice
 ```
-Keybindings and other `omarchy-shell shell summon luotao.zen` calls use the saved panel settings for omitted fields; values explicitly included in the summon payload take precedence.
+Keybindings and other `omarchy-shell shell summon aven.terminal-breather` calls use the saved panel settings for omitted fields; values explicitly included in the summon payload take precedence.
 
 For an SSH-friendly terminal guide, install `tb` and `tb-guide` from a checkout:
 
@@ -99,10 +99,10 @@ An optional `ramp` changes the phase tempo over the start of a session. `from` a
 The panel's **Settings** section controls the figure, bell, Do Not Disturb, and meditation-log path. These values are saved for the next session. The same options can be set through Omarchy:
 
 ```bash
-omarchy bar set luotao.zen bell false
-omarchy bar set luotao.zen dnd false
-omarchy bar set luotao.zen animation jupiter
-omarchy bar set luotao.zen meditationLogPath "$HOME/notes/meditation.md"
+omarchy bar set aven.terminal-breather bell false
+omarchy bar set aven.terminal-breather dnd false
+omarchy bar set aven.terminal-breather animation jupiter
+omarchy bar set aven.terminal-breather meditationLogPath "$HOME/notes/meditation.md"
 ```
 
 Practice minutes and streaks are stored in Omarchy's local plugin state. The optional meditation log appends a row for sessions of at least one minute, including sessions ended early. Set `meditationLogPath` to the note you want to use; the log is optional and does not create a missing parent folder.
