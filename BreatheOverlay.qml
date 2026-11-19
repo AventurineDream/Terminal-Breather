@@ -92,6 +92,21 @@ Item {
     onRunningChanged: if (!running) root.dndEvent("restored", false)
   }
 
+  // Engage runs as a tracked process, not a detached launch, so a restore
+  // that follows it can wait. A detached engage could land after the restore
+  // and leave DND on after the session ended.
+  property bool restoreAfterEngage: false
+  Process {
+    id: dndEngageProc
+    command: Model.dndSetCommand(true)
+    onExited: {
+      if (root.restoreAfterEngage) {
+        root.restoreAfterEngage = false
+        dndRestoreProc.running = true
+      }
+    }
+  }
+
   function dndEvent(event, arg) {
     var r = Model.dndStep(root.dnd, event, root.opened, root.dndWanted, arg)
     root.dnd = r.state
@@ -100,8 +115,12 @@ Item {
 
   function runDndEffect(effect) {
     if (effect === "probe") dndProbe.running = true
-    else if (effect === "restore") dndRestoreProc.running = true
-    else if (effect === "engage") Quickshell.execDetached(Model.dndSetCommand(true))
+    else if (effect === "restore") {
+      // Restore is owed but engage is still in flight: run it once engage exits.
+      if (dndEngageProc.running) root.restoreAfterEngage = true
+      else dndRestoreProc.running = true
+    }
+    else if (effect === "engage") dndEngageProc.running = true
     else if (effect === "refresh") Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
   }
 
