@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tb — launch Terminal Breather (luotao.zen) from the terminal.
+# tb — launch Terminal Breather (aven.terminal-breather) from the terminal.
 #
 # Install: copy this file and tb-guide into a directory on your PATH
 # (for example ~/.local/bin) and make both executable:
@@ -42,7 +42,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-tb — launch Terminal Breather (luotao.zen) from the terminal.
+tb — launch Terminal Breather (aven.terminal-breather) from the terminal.
 
 Usage: tb [--gui | --term | --help] [pattern] [minutes]
   --gui    force the fullscreen overlay (even over SSH)
@@ -95,8 +95,8 @@ SHELL_JSON="${HOME}/.config/omarchy/shell.json"
 # The `|| true` keeps a missing/unreadable shell.json from killing the
 # script under `set -e` — jq exits 2 on a missing file, and the fallback
 # below is the documented behaviour.
-saved_pattern="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .pattern // empty' "$SHELL_JSON" 2>/dev/null | head -1 || true)"
-saved_minutes="$(jq -r '.. | objects | select(.id? == "luotao.zen") | .minutes // empty' "$SHELL_JSON" 2>/dev/null | head -1 || true)"
+saved_pattern="$(jq -r '.. | objects | select(.id? == "aven.terminal-breather") | .pattern // empty' "$SHELL_JSON" 2>/dev/null | head -1 || true)"
+saved_minutes="$(jq -r '.. | objects | select(.id? == "aven.terminal-breather") | .minutes // empty' "$SHELL_JSON" 2>/dev/null | head -1 || true)"
 
 pattern="${args[0]:-${saved_pattern:-box}}"
 minutes="${args[1]:-${saved_minutes:-5}}"
@@ -144,4 +144,4 @@ done < <(systemctl --user show-environment 2>/dev/null)
 payload="$(jq -cn --arg pattern "$pattern" --argjson minutes "$minutes" \
   '{pattern: $pattern, minutes: $minutes}')"
 
-omarchy-shell shell summon luotao.zen "$payload"
+omarchy-shell shell summon aven.terminal-breather "$payload"

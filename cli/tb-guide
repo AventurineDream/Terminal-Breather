@@ -3,7 +3,7 @@
 
 Runs a breathing session right in the terminal (for use over SSH, e.g.
 Termius on a phone, where the GUI overlay on the computer's displays is not
-visible). Same patterns and timings as the luotao.zen plugin.
+visible). Same patterns and timings as the aven.terminal-breather plugin.
 
 The guide draws a circle that grows as you breathe in, holds, and
 shrinks as you breathe out — the same idea as the overlay's figure that
@@ -137,7 +137,7 @@ def resolve_log_path():
     try:
         with open(os.path.expanduser("~/.config/omarchy/shell.json")) as f:
             data = json.load(f, parse_constant=_reject_json_constant)
-        setting = _find_luotaozen_setting(data, "meditationLogPath", "")
+        setting = _find_breather_setting(data, "meditationLogPath", "")
     except (OSError, ValueError):
         setting = ""
     normalized = normalize_log_path(setting, home)
@@ -146,18 +146,18 @@ def resolve_log_path():
     return normalized
 
 
-def _find_luotaozen_setting(data, key, fallback):
-    """Walk shell.json and return key from the luotao.zen bar entry."""
+def _find_breather_setting(data, key, fallback):
+    """Walk shell.json and return key from the aven.terminal-breather bar entry."""
     if isinstance(data, dict):
-        if data.get("id") == "luotao.zen" and key in data:
+        if data.get("id") == "aven.terminal-breather" and key in data:
             return data[key]
         for value in data.values():
-            found = _find_luotaozen_setting(value, key, None)
+            found = _find_breather_setting(value, key, None)
             if found is not None:
                 return found
     elif isinstance(data, list):
         for value in data:
-            found = _find_luotaozen_setting(value, key, None)
+            found = _find_breather_setting(value, key, None)
             if found is not None:
                 return found
     return fallback
