@@ -31,6 +31,10 @@ parse_stats = _ns["parse_stats"]
 add_minutes = _ns["add_minutes"]
 log_row = _ns["log_row"]
 log_session = _ns["log_session"]
+breath_at = _ns["breath_at"]
+ramp_base_time = _ns["ramp_base_time"]
+ramp_scale = _ns["ramp_scale"]
+parse_minutes = _ns["parse_minutes"]
 
 pass_count = 0
 
@@ -232,5 +236,121 @@ with tempfile.TemporaryDirectory() as tmp:
               not os.path.exists(os.path.join(
                   tmp3, "Projects", "Obsidian", "Home",
                   "20_Practices", "Meditation", "Meditation Log.md")))
+
+# --- custom patterns: parity with ZenModel.js parseCustomPatterns ---
+def custom_from(raw):
+    """Load custom patterns from a patterns.json holding raw text."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["HOME"] = tmp
+        zen_dir = os.path.join(tmp, ".config", "omarchy", "zen")
+        os.makedirs(zen_dir)
+        with open(os.path.join(zen_dir, "patterns.json"), "w") as f:
+            f.write(raw)
+        return load_custom_patterns()
+
+
+def cfg(*entries):
+    return json.dumps({"patterns": list(entries)})
+
+
+def phase(label, secs, to):
+    return {"label": label, "secs": secs, "to": to}
+
+
+GOOD = {"key": "good-one", "name": "Good",
+        "phases": [phase("In", 2, 1), phase("Out", 2, 0)]}
+check("custom: a valid entry is kept", list(custom_from(cfg(GOOD))) == ["good-one"])
+check("custom: a built-in key cannot be overridden",
+      "box" not in custom_from(cfg(dict(GOOD, key="box", name="Hijack"))))
+check("custom: keys are lowercased", "slow-6" in custom_from(cfg(dict(GOOD, key="Slow-6"))))
+check("custom: a key with other characters is skipped",
+      custom_from(cfg(dict(GOOD, key="bad_key"))) == {})
+check("custom: a phase target other than 0 or 1 is skipped",
+      custom_from(cfg(dict(GOOD, key="half", phases=[phase("In", 2, 0.5), phase("Out", 2, 0)]))) == {})
+check("custom: a single phase is skipped",
+      custom_from(cfg(dict(GOOD, key="one", phases=[phase("In", 2, 1)]))) == {})
+check("custom: zero seconds are skipped",
+      custom_from(cfg(dict(GOOD, key="zero", phases=[phase("In", 0, 1), phase("Out", 2, 0)]))) == {})
+check("custom: a missing name is skipped",
+      custom_from(cfg({"key": "noname", "phases": GOOD["phases"]})) == {})
+check("custom: a bad first entry holds its key, as ZenModel does",
+      custom_from(cfg(dict(GOOD, key="dup", name=""), dict(GOOD, key="dup"))) == {})
+check("custom: the first valid duplicate wins",
+      custom_from(cfg(dict(GOOD, key="twice"), dict(GOOD, key="twice", name="Second")))["twice"]["name"] == "Good")
+check("custom: a non-list patterns field does not crash", custom_from('{"patterns": 5}') == {})
+check("custom: a non-object file does not crash", custom_from("[]") == {})
+check("custom: a non-object entry is skipped", list(custom_from(cfg("junk", GOOD))) == ["good-one"])
+# NaN and Infinity are not JSON: a file or stats blob holding them is malformed,
+# as ZenModel.js's JSON.parse treats it, so the guide ignores it too.
+check("json constants: NaN, Infinity and -Infinity make the input malformed, as in ZenModel",
+      all(custom_from('{"patterns": [%s], "note": %s}' % (json.dumps(GOOD), c)) == {}
+          for c in ("NaN", "Infinity", "-Infinity")) and
+      parse_stats('{"days": {"2026-11-13": NaN}}') == {"days": {}})
+# A 400-digit integer is valid JSON that math.isfinite cannot take (OverflowError).
+# It must count as not finite: the pattern is skipped, or the ramp dropped, never a crash.
+HUGE = int("1" * 400)
+check("custom: a 400-digit phase secs is skipped without a crash",
+      custom_from(cfg(dict(GOOD, key="huge", phases=[phase("In", HUGE, 1), phase("Out", 2, 0)]))) == {})
+check("ramp: a 400-digit ramp from is dropped and the pattern kept",
+      "ramp" not in custom_from(cfg(dict(GOOD, key="fire", phases=[phase("In", 0.5, 1), phase("Out", 0.5, 0)],
+                                         ramp={"from": HUGE, "to": 0.5, "overSecs": 60})))["fire"])
+
+FIRE = dict(GOOD, key="fire", name="Fire", phases=[phase("In", 0.5, 1), phase("Out", 0.5, 0)],
+            ramp={"from": 2, "to": 0.5, "overSecs": 60})
+fire_pat = custom_from(cfg(FIRE))["fire"]
+check("ramp: a valid ramp is kept", fire_pat["ramp"] == {"from": 2.0, "to": 0.5, "overSecs": 60.0})
+check("ramp: an invalid ramp is dropped and the pattern kept",
+      "ramp" not in custom_from(cfg(dict(FIRE, ramp={"from": 0, "to": 0.5, "overSecs": 60})))["fire"])
+check("ramp: an underflowing to/from ratio is dropped and the pattern kept",
+      "ramp" not in custom_from(cfg(dict(FIRE, ramp={"from": 1e300, "to": 1e-300, "overSecs": 60})))["fire"])
+check("ramp: an overflowing to/from ratio is dropped and the pattern kept",
+      "ramp" not in custom_from(cfg(dict(FIRE, ramp={"from": 1e-300, "to": 1e300, "overSecs": 60})))["fire"])
+check("bounds: a 1e308 phase is dropped (would overflow breath_at's countdown)",
+      custom_from(cfg(dict(GOOD, key="huge-phase", phases=[phase("In", 1e308, 1), phase("Out", 2, 0)]))) == {})
+check("bounds: a 1e308 ramp factor drops the ramp and keeps the pattern",
+      "ramp" not in custom_from(cfg(dict(FIRE, ramp={"from": 2, "to": 1e308, "overSecs": 60})))["fire"])
+EDGE = custom_from(cfg(dict(GOOD, key="edge", phases=[phase("In", 3600, 1), phase("Out", 3600, 0)],
+                            ramp={"from": 100, "to": 0.01, "overSecs": 3600})))["edge"]
+check("bounds: the extreme allowed values keep the ramp", "ramp" in EDGE)
+check("bounds: breath_at at the extreme stays finite (NaN and inf fail this)",
+      breath_at(EDGE, 1000)[1] < 1e6)
+check("ramp_scale: starts at the from tempo", ramp_scale(fire_pat, 0) == 2.0)
+check("ramp_scale: halfway is 1.25", abs(ramp_scale(fire_pat, 30) - 1.25) < 1e-9)
+check("ramp_scale: holds at the to tempo after overSecs", ramp_scale(fire_pat, 120) == 0.5)
+check("ramp_base_time: matches ZenModel at 30s", abs(ramp_base_time(fire_pat, 30) - 18.8001) < 0.01)
+check("ramp_base_time: matches ZenModel at 60s", abs(ramp_base_time(fire_pat, 60) - 55.4518) < 0.01)
+check("ramp_base_time: matches ZenModel at 120s", abs(ramp_base_time(fire_pat, 120) - 175.4518) < 0.01)
+check("ramp_base_time: no ramp is real time", ramp_base_time(resolve_pattern("box"), 42) == 42)
+
+HOLD_IN = custom_from(cfg(dict(GOOD, key="hold-in", phases=[phase("In", 2, 1), phase("Hold", 2, 1)])))["hold-in"]
+check("breath_at: the first phase starts from the last phase's fullness, as ZenModel",
+      breath_at(HOLD_IN, 0)[2] == 1.0)
+check("breath_at: box starts empty and inhales",
+      breath_at(resolve_pattern("box"), 0) == ("Breathe in", 4, 0.0))
+label, left, full = breath_at(resolve_pattern("box"), 5)
+check("breath_at: box at 5s is a full hold with 3s left", label == "Hold" and left == 3 and full == 1.0)
+check("breath_at: a ramped pattern at 0s shows one tick of In", breath_at(fire_pat, 0)[:2] == ("In", 1))
+check("breath_at: the ramp moves the phase timeline (fire at 30s is Out)", breath_at(fire_pat, 30)[0] == "Out")
+check("resolve_pattern: built-in keys ignore case", resolve_pattern("COHERENT")["name"] == "Coherent")
+
+# --- session length: default 5, capped at 120 (CLI argument) ---
+check("minutes: an absent argument gives the default 5",
+      parse_minutes(None) == 5)
+check("minutes: a normal value is kept",
+      parse_minutes("45") == 45)
+check("minutes: the cap itself is kept",
+      parse_minutes("120") == 120)
+check("minutes: 121 is clamped to 120",
+      parse_minutes("121") == 120)
+check("minutes: a very large integer is clamped to 120",
+      parse_minutes("9" * 400) == 120)
+check("minutes: zero falls back to the default 5",
+      parse_minutes("0") == 5)
+check("minutes: a negative value falls back to the default 5",
+      parse_minutes("-3") == 5)
+check("minutes: non-numeric text falls back to the default 5",
+      parse_minutes("soon") == 5)
+check("minutes: a decimal is invalid and falls back to the default 5",
+      parse_minutes("2.5") == 5)
 
 print("tb-guide: %d checks passed" % pass_count)

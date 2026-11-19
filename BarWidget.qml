@@ -111,8 +111,8 @@ Panel {
     var payload = JSON.stringify({
       pattern: patternKey || chosenPattern,
       minutes: minutes || chosenMinutes,
-      bell: setting("bell", true) !== false,
-      dnd: setting("dnd", true) !== false,
+      bell: Model.flagSetting(setting("bell", true), true),
+      dnd: Model.flagSetting(setting("dnd", true), true),
       logPath: setting("meditationLogPath", "") || "",
       animation: chosenAnimation
     })
@@ -511,7 +511,7 @@ Panel {
               Button {
                 text: "On"
                 bordered: true
-                selected: root.settingValue("bell", true) !== false
+                selected: Model.flagSetting(root.settingValue("bell", true), true)
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: root.updateSetting("bell", true)
@@ -519,7 +519,7 @@ Panel {
               Button {
                 text: "Off"
                 bordered: true
-                selected: root.settingValue("bell", true) === false
+                selected: !Model.flagSetting(root.settingValue("bell", true), true)
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: root.updateSetting("bell", false)
@@ -538,7 +538,7 @@ Panel {
               Button {
                 text: "On"
                 bordered: true
-                selected: root.settingValue("dnd", true) !== false
+                selected: Model.flagSetting(root.settingValue("dnd", true), true)
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: root.updateSetting("dnd", true)
@@ -546,7 +546,7 @@ Panel {
               Button {
                 text: "Off"
                 bordered: true
-                selected: root.settingValue("dnd", true) === false
+                selected: !Model.flagSetting(root.settingValue("dnd", true), true)
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: root.updateSetting("dnd", false)
@@ -580,7 +580,10 @@ Panel {
                   logPathField.text = String(root.setting("meditationLogPath", ""))
                 // Hand focus back to the key catcher so the panel
                 // shortcuts (1-9, a, s, Esc) keep working after editing.
-                keyCatcher.forceActiveFocus()
+                // Deferred: the Return key event that fired onAccepted is
+                // still propagating, and a synchronous focus change would
+                // let the key catcher receive it and start a session.
+                Qt.callLater(function () { keyCatcher.forceActiveFocus() })
               }
               Keys.onEscapePressed: {
                 // Discard half-typed text and give focus back to the key
