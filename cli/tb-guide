@@ -2,7 +2,7 @@
 """tb-guide — a terminal breathing guide for Terminal Breather.
 
 Runs a breathing session right in the terminal (for use over SSH, e.g.
-Termius on a phone, where the GUI overlay on dooracle's displays is not
+Termius on a phone, where the GUI overlay on the computer's displays is not
 visible). Same patterns and timings as the luotao.zen plugin.
 
 The guide draws a circle that grows as you breathe in, holds, and
@@ -244,6 +244,8 @@ def log_session(pattern_name, elapsed_secs, total_secs, completed):
     return minutes
 
 
+# Custom-pattern validation and phase timing mirror ZenModel.js. Fullness
+# motion is linear here, unlike the eased overlay (see breath_at).
 KEY_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
@@ -263,6 +265,9 @@ def _finite(v):
 
 
 # Limits on custom-pattern numbers, mirrored in ZenModel.js. Built-in patterns
+# use short phases without ramps; the example Breath of Fire ramps from 2 to 0.5.
+# These bounds keep `secs * scale` finite before math.ceil; over-limit phases
+# are skipped and an invalid ramp is dropped while keeping its pattern.
 MAX_PHASE_SECS = 3600.0
 MAX_RAMP_OVER_SECS = 3600.0
 MIN_RAMP_FACTOR = 0.01

@@ -203,6 +203,8 @@ Item {
   }
 
   function endSession(completed) {
+    // The completion notice uses the omarchy-action app name, which the
+    // notification service's Delivery.bypassesQuiet rule allows through DND.
     root.restoreDnd()
     var minutes = root.recordSession(completed)
     if (completed) {
