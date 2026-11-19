@@ -32,6 +32,7 @@ Item {
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
   readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
+  readonly property string shellPath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
   readonly property string defaultLogPath: Model.meditationLogPath(Quickshell.env("HOME"))
   property string logPath: defaultLogPath
 
@@ -49,39 +50,82 @@ Item {
   // A summon naming a custom pattern must resolve against the freshly read
   // config file, not the map from component load — a keybinding fired right
   // after the file is created would otherwise fall back to box. open()
-  // stashes the payload and the session starts once the file read
-  // completes (or fails, in which case the built-ins stand).
+  // stashes the payload and the session starts once the pattern file and the
+  // saved bar settings have both been read (or failed to read, in which case
+  // the built-ins and the defaults stand).
   property var pendingStart: null
+  property bool patternsReady: false
+  property bool savedReady: false
+
+  // The luotao.zen bar entry from shell.json: the panel's saved settings.
+  // A summon names only some keys; Model.sessionSettings fills the rest here.
+  property var savedSettings: ({})
 
   // Session comforts, set per-summon via payload ("bell": false, "dnd":
   // false to opt out). DND is borrowed, not owned: it engages only if it
   // was off, and whatever state the user had is restored afterwards.
+  // The shell's service objects are out of reach for a plugin that is not
+  // a full bar (serviceFor and firstPartyServiceFor return null), so DND
+  // goes through the notifications IPC that Omarchy's own menu uses.
   property bool bellWanted: true
   property bool dndWanted: true
-  property bool dndApplied: false
+  property var dnd: Model.dndInitial()
 
-  function notificationService() {
-    return root.shell && typeof root.shell.serviceFor === "function"
-      ? root.shell.serviceFor("omarchy.notifications") : null
+  // DND flow. Model.dndStep decides what happens; this block feeds it the events
+  // ("start", "end", and the "probed" and "restored" results that come back from
+  // the processes below) and runs the commands it returns.
+  Process {
+    id: dndProbe
+    command: Model.dndQueryCommand()
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.dndEvent("probed", Model.dndState(text))
+    }
   }
 
-  function applyDnd() {
-    if (!dndWanted || dndApplied) return
-    var svc = notificationService()
-    if (!svc || typeof svc.setDoNotDisturb !== "function") return
-    if (svc.doNotDisturb === true) return
-    svc.setDoNotDisturb(true)
-    dndApplied = true
-    Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
+  // A restore that cannot start emits runningChanged without exited; the
+  // reducer ignores the repeat report when exited has already answered.
+  Process {
+    id: dndRestoreProc
+    command: Model.dndSetCommand(false)
+    onExited: (exitCode) => root.dndEvent("restored", exitCode === 0)
+    onRunningChanged: if (!running) root.dndEvent("restored", false)
   }
 
-  function restoreDnd() {
-    if (!dndApplied) return
-    dndApplied = false
-    var svc = notificationService()
-    if (svc && typeof svc.setDoNotDisturb === "function") svc.setDoNotDisturb(false)
-    Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
+  // Engage runs as a tracked process, not a detached launch, so a restore
+  // that follows it can wait. A detached engage could land after the restore
+  // and leave DND on after the session ended.
+  property bool restoreAfterEngage: false
+  Process {
+    id: dndEngageProc
+    command: Model.dndSetCommand(true)
+    onExited: {
+      if (root.restoreAfterEngage) {
+        root.restoreAfterEngage = false
+        dndRestoreProc.running = true
+      }
+    }
   }
+
+  function dndEvent(event, arg) {
+    var r = Model.dndStep(root.dnd, event, root.opened, root.dndWanted, arg)
+    root.dnd = r.state
+    for (var i = 0; i < r.effects.length; i++) root.runDndEffect(r.effects[i])
+  }
+
+  function runDndEffect(effect) {
+    if (effect === "probe") dndProbe.running = true
+    else if (effect === "restore") {
+      // Restore is owed but engage is still in flight: run it once engage exits.
+      if (dndEngageProc.running) root.restoreAfterEngage = true
+      else dndRestoreProc.running = true
+    }
+    else if (effect === "engage") dndEngageProc.running = true
+    else if (effect === "refresh") Quickshell.execDetached(["omarchy-shell", "-q", "omarchy.indicators", "refresh"])
+  }
+
+  function applyDnd() { root.dndEvent("start") }
+  function restoreDnd() { root.dndEvent("end") }
 
   function ring(soundFile) {
     if (!bellWanted) return
@@ -99,33 +143,47 @@ Item {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     root.pendingStart = payload
+    root.patternsReady = false
+    root.savedReady = false
     statsFile.reload()
     patternsFile.reload()
+    savedFile.reload()
   }
 
-  function startSession(payload) {
-    if (payload.fontFamily) root.fontFamily = payload.fontFamily
+  // Starts the pending session once both of its inputs have been read. Each
+  // file's load handler calls this, so the order the reads finish in does not
+  // matter.
+  function tryStart() {
+    if (!root.pendingStart || !root.patternsReady || !root.savedReady) return
+    var p = root.pendingStart
+    root.pendingStart = null
+    root.startSession(p)
+  }
 
-    root.pattern = Model.pattern(payload.pattern, root.resolvedPatterns.map)
-    var minutes = Number(payload.minutes)
-    if (!isFinite(minutes) || minutes <= 0) minutes = 10
-    root.totalSecs = Math.max(10, Math.round(minutes * 60))
-    root.bellWanted = payload.bell !== false
-    root.dndWanted = payload.dnd !== false
-    root.logPath = payload.logPath || root.defaultLogPath
+  // A summon during a live session first logs the minutes already practiced:
+  // restarting silently would discard them. The payload's keys win; missing
+  // keys come from the saved settings (Model.sessionSettings).
+  function startSession(payload) {
+    if (root.opened && root.startedAt > 0) {
+      root.nowMs = Date.now()
+      root.recordSession(false)
+      root.restoreDnd()
+    }
+    if (payload.fontFamily) root.fontFamily = payload.fontFamily
+    var s = Model.sessionSettings(payload, root.savedSettings, Quickshell.env("HOME"))
+
+    root.pattern = Model.pattern(s.pattern, root.resolvedPatterns.map)
+    root.totalSecs = Math.max(10, Math.round(s.minutes * 60))
+    root.bellWanted = s.bell
+    root.dndWanted = s.dnd
+    root.logPath = s.logPath || root.defaultLogPath
 
     root.nowMs = Date.now()
     root.startedAt = root.nowMs
-    root.figureId = Art.resolveAnimation(payload.animation, root.startedAt)
+    root.figureId = Art.resolveAnimation(s.animation, root.startedAt)
     root.opened = true
     root.applyDnd()
     root.ring("bell.oga")
-  }
-
-  function takePendingStart() {
-    var p = root.pendingStart
-    root.pendingStart = null
-    return p
   }
 
   function close() {
@@ -147,13 +205,11 @@ Item {
     else root.open("{}")
   }
 
-  // Ending early still logs the minutes actually practiced — a streak kept
-  // by a short session beats one lost to perfectionism. The same minutes
-  // land in the Obsidian meditation log, one row per session.
-  function endSession(completed) {
-    // DND back to the user's state before the completion notification, or
-    // the bell we just rang announces a notification nobody sees.
-    root.restoreDnd()
+  // Records the session's minutes in stats and the meditation log: the minutes
+  // practiced when ended early (Esc counts too: a streak kept by a short session
+  // beats one lost to perfectionism), or the full length when completed. Returns
+  // the minutes recorded, 0 under one minute.
+  function recordSession(completed) {
     var minutes = Math.floor(root.elapsedSecs / 60)
     if (completed) minutes = Math.max(1, Math.round(root.totalSecs / 60))
     if (minutes >= 1) {
@@ -162,6 +218,14 @@ Item {
       Quickshell.execDetached(Model.persistStatsCommand(root.statsPath, root.stats))
       Quickshell.execDetached(Model.appendLogCommand(root.logPath, Model.logRow(today, root.pattern.name, minutes, completed)))
     }
+    return minutes
+  }
+
+  function endSession(completed) {
+    // The completion notice uses the omarchy-action app name, which the
+    // notification service's Delivery.bypassesQuiet rule allows through DND.
+    root.restoreDnd()
+    var minutes = root.recordSession(completed)
     if (completed) {
       root.ring("complete.oga")
       var summary = Model.statsSummary(root.stats, Qt.formatDateTime(new Date(), "yyyy-MM-dd"))
@@ -192,14 +256,34 @@ Item {
     printErrors: false
     onLoaded: {
       root.resolvedPatterns = Model.resolvePatterns(text())
-      var p = root.takePendingStart()
-      if (p) root.startSession(p)
+      root.patternsReady = true
+      root.tryStart()
     }
     onFileChanged: reload()
     onLoadFailed: {
       root.resolvedPatterns = Model.resolvePatterns("")
-      var p = root.takePendingStart()
-      if (p) root.startSession(p)
+      root.patternsReady = true
+      root.tryStart()
+    }
+  }
+
+  // The saved bar settings (figure, bell, DND, log path, defaults) that a
+  // summon payload falls back to. A missing or unreadable shell.json means none.
+  FileView {
+    id: savedFile
+    path: root.shellPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: {
+      root.savedSettings = Model.barEntrySettings(text())
+      root.savedReady = true
+      root.tryStart()
+    }
+    onFileChanged: reload()
+    onLoadFailed: {
+      root.savedSettings = ({})
+      root.savedReady = true
+      root.tryStart()
     }
   }
 

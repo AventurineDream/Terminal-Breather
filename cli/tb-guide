@@ -2,7 +2,7 @@
 """tb-guide — a terminal breathing guide for Terminal Breather.
 
 Runs a breathing session right in the terminal (for use over SSH, e.g.
-Termius on a phone, where the GUI overlay on dooracle's displays is not
+Termius on a phone, where the GUI overlay on the computer's displays is not
 visible). Same patterns and timings as the luotao.zen plugin.
 
 The guide draws a circle that grows as you breathe in, holds, and
@@ -19,7 +19,7 @@ Sessions under a minute are not logged.
 Usage: tb-guide [pattern] [minutes]
   pattern  box (default), 478, coherent, or a custom key from
            ~/.config/omarchy/zen/patterns.json
-  minutes  session length (default 5)
+  minutes  session length (default 5, max 120)
 
 Ctrl+C ends the session early.
 """
@@ -120,6 +120,13 @@ def normalize_log_path(raw, home):
     return expanded
 
 
+def _reject_json_constant(name):
+    """json parse_constant hook: NaN, Infinity and -Infinity are not JSON.
+    ZenModel.js's JSON.parse rejects them, so the guide treats them as
+    malformed input too, or it would read a file the overlay ignores."""
+    raise ValueError("non-standard JSON constant: " + name)
+
+
 def resolve_log_path():
     """The meditation-log path for this session: the meditationLogPath
     setting from shell.json (normalised), or the vault default. An
@@ -129,7 +136,7 @@ def resolve_log_path():
     setting = ""
     try:
         with open(os.path.expanduser("~/.config/omarchy/shell.json")) as f:
-            data = json.load(f)
+            data = json.load(f, parse_constant=_reject_json_constant)
         setting = _find_luotaozen_setting(data, "meditationLogPath", "")
     except (OSError, ValueError):
         setting = ""
@@ -159,7 +166,7 @@ def _find_luotaozen_setting(data, key, fallback):
 def parse_stats(raw):
     """Port of ZenModel.js parseStats: {"days": {...}} or {} on bad input."""
     try:
-        parsed = json.loads(raw or "{}")
+        parsed = json.loads(raw or "{}", parse_constant=_reject_json_constant)
         if parsed and isinstance(parsed.get("days"), dict):
             return {"days": parsed["days"]}
     except (ValueError, TypeError):
@@ -237,41 +244,163 @@ def log_session(pattern_name, elapsed_secs, total_secs, completed):
     return minutes
 
 
+# Custom-pattern validation and phase timing mirror ZenModel.js. Fullness
+# motion is linear here, unlike the eased overlay (see breath_at).
+KEY_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def _is_num(v):
+    """A JSON number. bool is excluded: True is not a number of seconds."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _finite(v):
+    """True for a finite JSON number. A JSON integer with hundreds of digits is
+    valid JSON but overflows float(); it counts as not finite, as JS Number()
+    makes such a literal Infinity in ZenModel.js."""
+    try:
+        return math.isfinite(v)
+    except OverflowError:
+        return False
+
+
+# Limits on custom-pattern numbers, mirrored in ZenModel.js. Built-in patterns
+# use short phases without ramps; the example Breath of Fire ramps from 2 to 0.5.
+# These bounds keep `secs * scale` finite before math.ceil; over-limit phases
+# are skipped and an invalid ramp is dropped while keeping its pattern.
+MAX_PHASE_SECS = 3600.0
+MAX_RAMP_OVER_SECS = 3600.0
+MIN_RAMP_FACTOR = 0.01
+MAX_RAMP_FACTOR = 100.0
+
+
+def _valid_phase(ph):
+    """Port of ZenModel.js isValidPhase: a label, secs above 0 and at most
+    MAX_PHASE_SECS, and a target fullness of exactly 0 or 1."""
+    return (isinstance(ph, dict) and isinstance(ph.get("label"), str)
+            and ph["label"] != "" and _is_num(ph.get("secs"))
+            and _finite(ph["secs"]) and 0 < ph["secs"] <= MAX_PHASE_SECS
+            and _is_num(ph.get("to")) and ph["to"] in (0, 1))
+
+
+def _valid_ramp(r):
+    """Port of ZenModel.js validRamp: from and to are finite factors within
+    [MIN_RAMP_FACTOR, MAX_RAMP_FACTOR]; overSecs is finite, above 0 and at
+    most MAX_RAMP_OVER_SECS; and to/from is a finite positive ratio. A ratio
+    that underflows to 0 or overflows to inf would make ramp_base_time take
+    log(0) or return inf mid-session."""
+    if not isinstance(r, dict):
+        return False
+    if not all(_is_num(r.get(k)) and _finite(r[k]) for k in ("from", "to", "overSecs")):
+        return False
+    if not (MIN_RAMP_FACTOR <= r["from"] <= MAX_RAMP_FACTOR
+            and MIN_RAMP_FACTOR <= r["to"] <= MAX_RAMP_FACTOR
+            and 0 < r["overSecs"] <= MAX_RAMP_OVER_SECS):
+        return False
+    ratio = float(r["to"]) / float(r["from"])
+    return math.isfinite(ratio) and ratio > 0
+
+
 def load_custom_patterns():
-    """Custom patterns from ~/.config/omarchy/zen/patterns.json."""
+    """Custom patterns from ~/.config/omarchy/zen/patterns.json, validated the
+    way ZenModel.js parseCustomPatterns validates them. Keys are lowercased; a
+    key seen earlier in the file (even on a bad entry) blocks later ones; a key
+    that collides with a built-in is ignored; a bad entry is skipped. A malformed
+    file yields no custom patterns rather than an error."""
     path = os.path.expanduser("~/.config/omarchy/zen/patterns.json")
     out = {}
     try:
         with open(path) as f:
-            data = json.load(f)
+            data = json.load(f, parse_constant=_reject_json_constant)
     except (OSError, ValueError):
         return out
-    for p in data.get("patterns", []):
-        key = p.get("key")
-        phases = p.get("phases")
-        if not key or not phases:
+    entries = data.get("patterns") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return out
+    seen = set()
+    for p in entries:
+        if not isinstance(p, dict) or not isinstance(p.get("key"), str):
             continue
-        parsed = []
-        ok = True
-        for ph in phases:
-            try:
-                parsed.append(
-                    (str(ph["label"]), float(ph["secs"]), float(ph["to"]))
-                )
-            except (KeyError, TypeError, ValueError):
-                ok = False
-                break
-        if ok and parsed:
-            out[key] = {"name": p.get("name", key), "phases": parsed}
+        key = p["key"].lower()
+        if not KEY_RE.fullmatch(key) or key in seen:
+            continue
+        seen.add(key)
+        if key in BUILTIN:
+            continue
+        name = p.get("name")
+        phases = p.get("phases")
+        if not isinstance(name, str) or name == "":
+            continue
+        if not isinstance(phases, list) or len(phases) < 2:
+            continue
+        if not all(_valid_phase(ph) for ph in phases):
+            continue
+        entry = {
+            "name": name,
+            "phases": [(ph["label"], float(ph["secs"]), float(ph["to"])) for ph in phases],
+        }
+        ramp = p.get("ramp")
+        if _valid_ramp(ramp):
+            entry["ramp"] = {k: float(ramp[k]) for k in ("from", "to", "overSecs")}
+        out[key] = entry
     return out
 
 
 def resolve_pattern(key):
-    patterns = dict(BUILTIN)
-    patterns.update(load_custom_patterns())
-    if key in patterns:
-        return patterns[key]
-    return patterns["box"]
+    """The pattern for key, as ZenModel.pattern resolves it: keys ignore case,
+    custom patterns come from patterns.json, and an unknown key is box."""
+    key = str(key or "").lower()
+    custom = load_custom_patterns()
+    if key in custom:
+        return custom[key]
+    return BUILTIN.get(key, BUILTIN["box"])
+
+
+def ramp_scale(pat, t):
+    """Port of ZenModel.js rampScale: the tempo multiplier t seconds into a
+    session (1 with no ramp). It moves linearly from `from` to `to` over
+    `overSecs`, then holds."""
+    ramp = pat.get("ramp")
+    if not ramp:
+        return 1.0
+    f = min(max(t / ramp["overSecs"], 0.0), 1.0)
+    return ramp["from"] + (ramp["to"] - ramp["from"]) * f
+
+
+def ramp_base_time(pat, t):
+    """Port of ZenModel.js rampBaseTime: the written-pattern seconds that have
+    passed after t real seconds, integrating 1/scale over the ramp."""
+    t = max(t, 0.0)
+    ramp = pat.get("ramp")
+    if not ramp:
+        return t
+    r0, r1, over = ramp["from"], ramp["to"], ramp["overSecs"]
+    if r1 == r0:
+        return t / r0
+    if t <= over:
+        return over / (r1 - r0) * math.log((r0 + (r1 - r0) * t / over) / r0)
+    done = over / (r1 - r0) * math.log(r1 / r0)
+    return done + (t - over) / r1
+
+
+def breath_at(pat, elapsed):
+    """Port the overlay's phase timeline without its half-cosine fullness easing.
+    The terminal renderer quantizes fullness to cells, so keeping its motion
+    linear avoids a separate easing path while preserving phase timing and ramp
+    speed. For elapsed real seconds, return (label, whole seconds left in the
+    phase at the session's tempo, fullness in [0, 1]).
+    """
+    phases = pat["phases"]
+    cycle = sum(ph[1] for ph in phases)
+    into = ramp_base_time(pat, elapsed) % cycle
+    scale = ramp_scale(pat, elapsed)
+    frm = phases[-1][2]
+    for label, secs, to in phases:
+        if into < secs:
+            return label, math.ceil((secs - into) * scale), frm + (to - frm) * (into / secs)
+        into -= secs
+        frm = to
+    return phases[0][0], math.ceil(phases[0][1] * scale), frm
 
 
 def fmt_clock(total_secs):
@@ -306,21 +435,33 @@ def circle_block(radius, max_radius, colour):
     return coloured
 
 
+DEFAULT_MINUTES = 5
+MAX_MINUTES = 120  # longest session the CLI accepts; bounds accidental runs
+
+
+def parse_minutes(raw):
+    """Return the session length in minutes for a CLI argument.
+
+    raw is the argv string, or None when absent. Invalid and nonpositive
+    values give DEFAULT_MINUTES; valid values above MAX_MINUTES are clamped
+    to it, so arbitrarily large integers cannot start an enormous session.
+    Non-integer text such as "2.5" counts as invalid.
+    """
+    try:
+        minutes = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MINUTES
+    if minutes <= 0:
+        return DEFAULT_MINUTES
+    return min(minutes, MAX_MINUTES)
+
+
 def main():
     pattern_key = sys.argv[1] if len(sys.argv) > 1 else "box"
-    try:
-        minutes = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    except ValueError:
-        minutes = 5
-    if minutes <= 0:
-        minutes = 5
+    minutes = parse_minutes(sys.argv[2] if len(sys.argv) > 2 else None)
 
     pat = resolve_pattern(pattern_key)
     total_secs = minutes * 60
-    phases = pat["phases"]
-    cycle_secs = sum(ph[1] for ph in phases)
-    if cycle_secs <= 0:
-        cycle_secs = 16
 
     # Size the circle to the terminal (narrow phone screens included).
     try:
@@ -329,24 +470,6 @@ def main():
         cols, rows = 80, 24
     max_radius = max(3, min(9, (cols // 2 - 2) // 2, (rows - 8) // 2))
     max_radius = min(max_radius, 10)
-
-    # Phase boundaries within one cycle.
-    bounds = []
-    acc = 0.0
-    for label, secs, to in phases:
-        bounds.append((acc, acc + secs, label, to))
-        acc += secs
-
-    def state_at(pos, elapsed):
-        for i, (start, end, label, to) in enumerate(bounds):
-            if pos < end or i == len(bounds) - 1:
-                prev_to = bounds[i - 1][3] if i > 0 else bounds[-1][3]
-                if elapsed < cycle_secs and i == 0:
-                    prev_to = 0.0
-                frac = (pos - start) / (end - start) if end > start else 1.0
-                frac = max(0.0, min(1.0, frac))
-                return label, end - pos, prev_to + (to - prev_to) * frac
-        return phases[-1][0], 0.0, phases[-1][2]
 
     stop = {"flag": False}
 
@@ -374,14 +497,13 @@ def main():
             remaining = total_secs - elapsed
             if remaining <= 0 or stop["flag"]:
                 break
-            pos = elapsed % cycle_secs
-            label, phase_left, fullness = state_at(pos, elapsed)
+            label, phase_left, fullness = breath_at(pat, elapsed)
             radius = MIN_RADIUS + fullness * (max_radius - MIN_RADIUS)
             colour = PHASE_COLOURS.get(label, "36")
 
             lines = circle_block(radius, max_radius, colour)
             lines.append(label)
-            lines.append("%d · %s left" % (math.ceil(phase_left), fmt_clock(remaining)))
+            lines.append("%d · %s left" % (phase_left, fmt_clock(remaining)))
             lines.append("")
 
             sys.stdout.write("\x1b[%dA" % block_lines)

@@ -1,8 +1,10 @@
 .pragma library
 
-// Pure helpers for the Terminal Breather plugin: breathing patterns, session math, and
-// streak bookkeeping. No Qt imports — everything here is testable data-in
-// data-out.
+/**
+ * Pure data helpers shared by Terminal Breather's bar widget, fullscreen overlay,
+ * and terminal guide. No Qt or I/O; durations use seconds unless named minutes.
+ */
+
 
 // Each phase: label shown to the breather, seconds it lasts, and where the
 // circle should be at its end (0 = fully exhaled, 1 = fully inhaled).
@@ -41,9 +43,29 @@ var PATTERNS = {
 
 var PATTERN_ORDER = ["box", "478", "coherent"]
 
+// Own-property lookup only: keys like "constructor" or "toString" must not
+// resolve to Object.prototype members. Matches Python's dict-membership guard.
+/**
+ * Tests an own property without consulting Object.prototype.
+ * @param {Object} obj Object to inspect.
+ * @param {string} key Property name.
+ * @returns {boolean} True only when `key` belongs to `obj`.
+ */
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+/**
+ * Resolves a pattern key case-insensitively, falling back to Box breathing.
+ * @param {string} key Pattern key.
+ * @param {Object} [map] Optional resolved pattern map.
+ * @returns {Object} Matching pattern or the built-in Box pattern.
+ */
 function pattern(key, map) {
   var m = map || PATTERNS
-  return m[String(key || "").toLowerCase()] || m.box || PATTERNS.box
+  var k = String(key || "").toLowerCase()
+  if (hasOwn(m, k) && m[k]) return m[k]
+  return m.box || PATTERNS.box
 }
 
 // ---- Custom patterns. A JSON config file (default
@@ -58,12 +80,31 @@ function pattern(key, map) {
 // ramp (see below) that scales its phases over the first minute of a
 // session; an invalid ramp is dropped and the pattern kept.
 
+// Limits on custom-pattern numbers, mirrored in cli/tb-guide. Built-in patterns
+// use short phases with no ramp; the example Breath of Fire ramps from 2 to 0.5.
+// The bounds keep `secs * scale` finite before the countdown is rounded.
+var MAX_PHASE_SECS = 3600
+var MAX_RAMP_OVER_SECS = 3600
+var MIN_RAMP_FACTOR = 0.01
+var MAX_RAMP_FACTOR = 100
+
+/**
+ * Validates one phase in a custom pattern.
+ * @param {Object} ph Phase with a label, `secs` in seconds, and `to` fullness.
+ * @returns {boolean} True for a non-empty label, bounded finite duration, and target 0 or 1.
+ */
 function isValidPhase(ph) {
   return ph && typeof ph.label === "string" && ph.label.length > 0 &&
-    typeof ph.secs === "number" && isFinite(ph.secs) && ph.secs > 0 &&
+    typeof ph.secs === "number" && isFinite(ph.secs) &&
+    ph.secs > 0 && ph.secs <= MAX_PHASE_SECS &&
     (ph.to === 0 || ph.to === 1)
 }
 
+/**
+ * Parses custom pattern entries, skipping malformed entries and built-in key collisions.
+ * @param {string} raw Contents of patterns.json.
+ * @returns {Object[]} Valid custom patterns in file order; malformed JSON yields an empty list.
+ */
 function parseCustomPatterns(raw) {
   var out = []
   var seen = {}
@@ -76,9 +117,9 @@ function parseCustomPatterns(raw) {
       if (!p || typeof p.key !== "string") continue
       var key = p.key.toLowerCase()
       if (!/^[a-z0-9][a-z0-9-]*$/.test(key)) continue
-      if (seen[key]) continue
+      if (hasOwn(seen, key)) continue
       seen[key] = true
-      if (PATTERNS[key]) continue
+      if (hasOwn(PATTERNS, key)) continue
       if (typeof p.name !== "string" || p.name.length === 0) continue
       if (!Array.isArray(p.phases) || p.phases.length < 2) continue
       var phases = []
@@ -152,10 +193,20 @@ function minuteOptions(choices) {
 // slow and builds speed — breath of fire is the canonical example: short
 // in/out phases with a ramp from slow to fast.
 
+/**
+ * Validates a tempo ramp whose factors scale phase durations over `overSecs`.
+ * @param {Object} r Ramp with `from`/`to` factors and `overSecs` in seconds.
+ * @returns {boolean} True when every value is finite and within the supported bounds.
+ * @remarks Factor bounds keep `to/from` finite; the ratio test is defensive if those limits change.
+ */
 function validRamp(r) {
-  return r && typeof r.from === "number" && isFinite(r.from) && r.from > 0 &&
-    typeof r.to === "number" && isFinite(r.to) && r.to > 0 &&
-    typeof r.overSecs === "number" && isFinite(r.overSecs) && r.overSecs > 0
+  return r && typeof r.from === "number" && isFinite(r.from) &&
+    r.from >= MIN_RAMP_FACTOR && r.from <= MAX_RAMP_FACTOR &&
+    typeof r.to === "number" && isFinite(r.to) &&
+    r.to >= MIN_RAMP_FACTOR && r.to <= MAX_RAMP_FACTOR &&
+    typeof r.overSecs === "number" && isFinite(r.overSecs) &&
+    r.overSecs > 0 && r.overSecs <= MAX_RAMP_OVER_SECS &&
+    isFinite(r.to / r.from) && r.to / r.from > 0
 }
 
 // Current tempo scale at `t` seconds into the session: 1 with no ramp.
@@ -302,6 +353,100 @@ function bellCommand(soundFile) {
   ]
 }
 
+/**
+ * Builds argv to query Omarchy's DND state without a shell service handle.
+ * @returns {string[]} IPC command argv; failed or timed-out queries produce no state text.
+ * @remarks The five-second timeout bounds how long a missing shell response can block state handling.
+ */
+function dndQueryCommand() {
+  return ["sh", "-c", 'out=$(timeout 5 omarchy-shell notifications isDnd) || exit 1; printf %s "$out"']
+}
+/**
+ * Builds argv to set the shell's Do Not Disturb state.
+ * @param {boolean} on True to enable DND, false to restore notifications.
+ * @returns {string[]} IPC command argv.
+ * @remarks The five-second timeout prevents a hung restore from remaining in flight indefinitely.
+ */
+function dndSetCommand(on) {
+  return ["timeout", "5", "omarchy-shell", "notifications", "setDnd", on ? "on" : "off"]
+}
+
+/**
+ * Parses the notification service's DND response.
+ * @param {string} stdout Raw query output.
+ * @returns {"on"|"off"|"unknown"} Only exact `on`/`off` responses are trusted.
+ */
+function dndState(stdout) {
+  var word = String(stdout == null ? "" : stdout).trim()
+  return word === "on" || word === "off" ? word : "unknown"
+}
+
+// DND ownership as a pure step. The overlay feeds it events and runs the effects
+// it returns, so every transition can be tested here. State: {owned, busy, pendingProbe}.
+//   owned        DND is ours: this session engaged it, or a restore is still owed
+//                after a failed one. Set only after a probe reads "off"; cleared
+//                only by a restore that exited 0.
+//   busy         a restore process is in flight; its result arrives as "restored".
+//   pendingProbe a session started while a restore was in flight; it probes once the
+//                restore settles, so it never reads DND still switching off.
+// Events: "start" (a session begins), "end" (a session ends or is replaced),
+// "probed" (arg: dndState of the query output), "restored" (arg: true if the
+// restore exited 0). live: a session is running; wanted: this session wants DND.
+// Returns {state, effects}; effects are "probe", "restore", "engage" and "refresh".
+// A failed restore is never retried in a loop: the next "start" or "end" retries it.
+/**
+ * Creates an unowned, idle DND state with no pending probe.
+ * @returns {{owned: boolean, busy: boolean, pendingProbe: boolean}} Fresh transition state.
+ */
+function dndInitial() {
+  return { owned: false, busy: false, pendingProbe: false }
+}
+
+/**
+ * Reduces a DND lifecycle event to a new state and requested shell effects.
+ * @param {Object} st Prior state from `dndInitial` or a previous result.
+ * @param {string} event `start`, `end`, `probed`, or `restored`.
+ * @param {boolean} live Whether a breathing session is active.
+ * @param {boolean} wanted Whether this session requests DND.
+ * @param {string|boolean} arg Probe state (`on`/`off`/`unknown`) or restore success.
+ * @returns {{state: Object, effects: string[]}} New state and effects; performs no I/O.
+ */
+function dndStep(st, event, live, wanted, arg) {
+  var s = { owned: st.owned, busy: st.busy, pendingProbe: st.pendingProbe }
+  var fx = []
+  function restore() {
+    if (s.owned && !s.busy) { s.busy = true; fx.push("restore") }
+  }
+  if (event === "start") {
+    restore()
+    if (wanted) {
+      if (s.owned || s.busy) s.pendingProbe = true
+      else fx.push("probe")
+    }
+  } else if (event === "end") {
+    restore()
+    s.pendingProbe = false
+  } else if (event === "probed") {
+    // Only an explicit "off" is engaged: "on" is the user's own DND, and
+    // "unknown" must leave DND exactly as it was.
+    if (arg === "off" && live && wanted && !s.owned) {
+      s.owned = true
+      fx.push("engage", "refresh")
+    }
+  } else if (event === "restored") {
+    // With no restore in flight this is the second report of one exit (exited,
+    // then runningChanged), so it is ignored.
+    if (!s.busy) return { state: s, effects: fx }
+    s.busy = false
+    if (arg) s.owned = false
+    fx.push("refresh")
+    var pending = s.pendingProbe
+    s.pendingProbe = false
+    if (pending && live && wanted && !s.owned) fx.push("probe")
+  }
+  return { state: s, effects: fx }
+}
+
 // Argv for persisting the stats file; JSON travels as a positional arg so it
 // is data to the shell, never syntax.
 function persistStatsCommand(path, stats) {
@@ -382,4 +527,80 @@ function formatRemaining(totalSecs) {
   var m = Math.floor(s / 60)
   var sec = s % 60
   return m + ":" + (sec < 10 ? "0" : "") + sec
+}
+
+/**
+ * Reads a boolean setting written by the panel or `omarchy bar set`.
+ * @param {*} value Boolean or its string representation; other values are absent/invalid.
+ * @param {boolean} fallback Value to use when `value` is not an explicit boolean.
+ * @returns {boolean} Parsed value or `fallback`.
+ */
+function flagSetting(value, fallback) {
+  if (value === false || value === "false") return false
+  if (value === true || value === "true") return true
+  return fallback
+}
+
+/**
+ * Finds the first `luotao.zen` bar entry in recursive shell.json traversal order.
+ * @param {string} raw Serialized shell configuration.
+ * @returns {Object} The first matching entry, or `{}` for malformed/missing input; duplicates are not merged.
+ */
+function barEntrySettings(raw) {
+  var found = {}
+  function walk(node) {
+    if (Array.isArray(node)) {
+      for (var i = 0; i < node.length; i++) if (walk(node[i])) return true
+      return false
+    }
+    if (node && typeof node === "object") {
+      if (node.id === "luotao.zen") { found = node; return true }
+      for (var k in node) if (walk(node[k])) return true
+    }
+    return false
+  }
+  try { walk(JSON.parse(raw || "{}")) } catch (e) {}
+  return found
+}
+
+/**
+ * Normalizes a saved or summoned meditation-log path.
+ * @param {string|null|undefined} raw Path; a leading `~/` expands against `home`.
+ * @param {string} home Quickshell's HOME directory.
+ * @returns {string} Absolute path, or `""` to use the vault default when absent or invalid.
+ */
+function usableLogPath(raw, home) {
+  // Non-string values (arrays, numbers, objects) are unusable: String() would
+  // turn them into paths that tb-guide rejects. null/undefined are absent.
+  if (raw === null || raw === undefined) return ""
+  if (typeof raw !== "string") return ""
+  var normalized = normalizeLogPath(raw, home)
+  return normalized === null ? "" : normalized
+}
+
+// Matches the manifest's duration cap and keeps totalSecs = minutes * 60 int-safe.
+var MAX_SESSION_MINUTES = 120
+
+/**
+ * Resolves session settings in payload → saved bar entry → built-in default order.
+ * @param {Object} payload Explicit summon settings; omitted values inherit.
+ * @param {Object} saved Settings from the luotao.zen bar entry.
+ * @param {string} home Quickshell's HOME, used to normalize a log path.
+ * @returns {{pattern: string, minutes: number, bell: boolean, dnd: boolean, animation: string, logPath: string}} Session settings; `minutes` is in minutes and capped at 120.
+ */
+function sessionSettings(payload, saved, home) {
+  var p = payload || {}
+  var s = saved || {}
+  var minutes = Number(p.minutes)
+  if (!isFinite(minutes) || minutes <= 0) minutes = Number(s.minutes)
+  if (!isFinite(minutes) || minutes <= 0) minutes = 10
+  minutes = Math.min(minutes, MAX_SESSION_MINUTES)
+  return {
+    pattern: p.pattern || s.pattern || "box",
+    minutes: minutes,
+    bell: flagSetting(p.bell, flagSetting(s.bell, true)),
+    dnd: flagSetting(p.dnd, flagSetting(s.dnd, true)),
+    animation: p.animation || s.animation || "random",
+    logPath: usableLogPath(p.logPath, home) || usableLogPath(s.meditationLogPath, home) || ""
+  }
 }
