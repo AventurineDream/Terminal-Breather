@@ -470,7 +470,7 @@ function persistStatsCommand(path, stats) {
 var MEDITATION_LOG_HEADER = "# Meditation Log\n\nSessions logged by Terminal-Breather (fork of luotao.zen) — one row per session, appended automatically when a session ends.\n\n| Date | Pattern | Minutes | Completed |\n| --- | --- | --- | --- |"
 
 function meditationLogPath(home) {
-  return (home || "") + "/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
+  return (home || "") + "/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md"
 }
 
 // Normalize a user-entered meditation-log path from the panel Settings

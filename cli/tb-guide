@@ -93,7 +93,7 @@ MEDITATION_LOG_HEADER = (
 
 def default_log_path(home):
     """The vault default meditation log, mirroring meditationLogPath()."""
-    return (home or "") + "/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
+    return (home or "") + "/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md"
 
 
 def normalize_log_path(raw, home):

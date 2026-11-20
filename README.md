@@ -29,9 +29,13 @@ Guided breathing for the Omarchy shell. Follow an animated ASCII planet or geome
 | `478` | In 4 · hold 7 · out 8 | Winding down |
 | `coherent` | In 5.5 · out 5.5 | Slow, even breathing |
 
-## Install
+## Requirements
 
-Requires Omarchy Quattro or later.
+- Omarchy Quattro or later
+- Obsidian (optional) — only if you want session rows in a meditation log; practice minutes and streaks are tracked in the plugin's own state either way
+- Python 3 (optional) — only for the `tb-guide` terminal guide
+
+## Install
 
 ```bash
 omarchy plugin add https://github.com/AventurineDream/Terminal-Breather.git --enable
@@ -105,11 +109,36 @@ omarchy bar set aven.terminal-breather animation jupiter
 omarchy bar set aven.terminal-breather meditationLogPath "$HOME/notes/meditation.md"
 ```
 
-Practice minutes and streaks are stored in Omarchy's local plugin state. The optional meditation log appends a row for sessions of at least one minute, including sessions ended early. Set `meditationLogPath` to the note you want to use; the log is optional and does not create a missing parent folder.
+Practice minutes and streaks are stored in Omarchy's local plugin state. The optional meditation log appends a row for sessions of at least one minute, including sessions ended early. With `meditationLogPath` empty, the log is `~/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md`; set it to any absolute path to use another note. The log does not create a missing parent folder: if the folder is absent, the row is skipped silently.
 
 ## Video
 
 [Watch the Terminal Breather demo](demo-terminal-breather.mp4) — a short, cropped capture of the session overlay and its breathing animation.
+
+## Changelog
+
+### Unreleased
+
+- Plugin id renamed `luotao.zen` → `aven.terminal-breather` (the upstream already holds `luotao.zen` in the marketplace). Existing installs must remove the plugin and re-add it under the new id; patterns and stats under `~/.config/omarchy/zen/` and `~/.local/state/omarchy/zen/` are unchanged.
+- The default meditation-log path follows the vault rename: `~/Projects/Obsidian/Home/…` → `~/Projects/Obsidian/Aventurine/…`.
+- Hardened session inputs: phase, ramp, and session durations are bounded, and custom-pattern validation matches the overlay. A Do Not Disturb restore now waits for the engage step, so DND can no longer be left on after a session.
+
+### 0.8.2
+
+- Figures move within a breath: faster, measured rotation, planet-specific secondary motion, and details that respond to inhale/exhale beyond the overall scale.
+- Petal sways, Lattice shimmers, and Orbits moons travel visibly along their tracks. The figure roster, three-layer palettes, stipple style, and breathing clock are unchanged.
+
+### 0.8.1
+
+- Panel height fix: the panel content is no longer clipped — the Begin button is fully visible.
+
+### 0.8.0
+
+- Pattern and duration pickers are shell dropdowns; the choice is saved as the default for the next session.
+
+### 0.7.1
+
+- User-visible "Zen" renamed to "Terminal Breather" (plugin id and data paths unchanged at the time).
 
 ## Development
 
