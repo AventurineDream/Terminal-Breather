@@ -141,7 +141,7 @@ check("normalize: absolute path passes through",
       normalize_log_path("/tmp/log.md", "/home/aven") == "/tmp/log.md")
 check("default log path is the vault meditation log",
       default_log_path("/home/aven") ==
-      "/home/aven/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md")
+      "/home/aven/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md")
 
 # --- stats helpers (mirror ZenModel.js parseStats / addMinutes) ---
 check("parse_stats: bad input gives empty days",
@@ -182,7 +182,7 @@ with tempfile.TemporaryDirectory() as tmp:
     _ns["STATS_PATH"] = stats_path
     # The vault-default log folder exists in this temp HOME, so the row
     # lands; a second case below removes it to check the skip.
-    log_dir = os.path.join(tmp, "Projects", "Obsidian", "Home",
+    log_dir = os.path.join(tmp, "Projects", "Obsidian", "Aventurine",
                            "20_Practices", "Meditation")
     os.makedirs(log_dir)
     log_path = os.path.join(log_dir, "Meditation Log.md")
@@ -234,7 +234,7 @@ with tempfile.TemporaryDirectory() as tmp:
                   list(json.load(f)["days"].values())[0] == 2)
         check("log_session: no log file is created when the folder is missing",
               not os.path.exists(os.path.join(
-                  tmp3, "Projects", "Obsidian", "Home",
+                  tmp3, "Projects", "Obsidian", "Aventurine",
                   "20_Practices", "Meditation", "Meditation Log.md")))
 
 # --- custom patterns: parity with ZenModel.js parseCustomPatterns ---

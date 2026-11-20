@@ -244,7 +244,7 @@ check("formatRemaining", M.formatRemaining(65) === "1:05");
 check(
   "log path default",
   M.meditationLogPath("/home/aven") ===
-    "/home/aven/Projects/Obsidian/Home/20_Practices/Meditation/Meditation Log.md"
+    "/home/aven/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md"
 );
 check(
   "normalizeLogPath: empty means vault default",
