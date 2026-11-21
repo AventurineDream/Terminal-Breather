@@ -12,7 +12,7 @@ const src = fs
   .replace(/^\.pragma library\n/, "");
 const factory = new Function(
   src +
-    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, patternOptions, minuteOptions, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, normalizeLogPath, logRow, appendLogCommand, flagSetting, barEntrySettings, sessionSettings, dndQueryCommand, dndSetCommand, dndState, dndInitial, dndStep };"
+    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, patternOptions, minuteOptions, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, normalizeLogPath, logRow, appendLogCommand, flagSetting, barEntrySettings, sessionSettings, dndQueryCommand, dndEngageCommand, dndRestoreCommand, dndState, dndInitial, dndStep, DND_MARKER_BODY, persistStatsCommand, localPathOf };"
 );
 const M = factory();
 
@@ -367,10 +367,12 @@ check("flagSetting: absent takes the fallback",
 check("flagSetting: junk takes the fallback", M.flagSetting("nope", true) === true);
 const savedRaw = JSON.stringify([
   { id: "omarchy.clock" },
-  { id: "luotao.zen", pattern: "478", minutes: 15, animation: "saturn", bell: "false", dnd: false, meditationLogPath: "/tmp/m.md" },
+  { id: "aven.terminal-breather", pattern: "478", minutes: 15, animation: "saturn", bell: "false", dnd: false, meditationLogPath: "/tmp/m.md" },
 ]);
 const saved = M.barEntrySettings(savedRaw);
-check("barEntrySettings: finds the luotao.zen entry", saved.pattern === "478" && saved.animation === "saturn");
+check("barEntrySettings: finds the aven.terminal-breather entry", saved.pattern === "478" && saved.animation === "saturn");
+check("barEntrySettings: ignores the pre-rename luotao.zen entry",
+  JSON.stringify(M.barEntrySettings('[{"id":"luotao.zen","pattern":"478"}]')) === "{}");
 check("barEntrySettings: junk gives empty", JSON.stringify(M.barEntrySettings("not json")) === "{}");
 check("barEntrySettings: no entry gives empty", JSON.stringify(M.barEntrySettings('{"bar": []}')) === "{}");
 const bare = M.sessionSettings({}, {});
@@ -432,6 +434,45 @@ check("sessionSettings: null and undefined payload log paths are absent, so the 
   M.sessionSettings({ logPath: null }, saved, TEST_HOME).logPath === "/tmp/m.md" &&
   M.sessionSettings({ logPath: undefined }, saved, TEST_HOME).logPath === "/tmp/m.md");
 
+// Shared stats: the bar hands this session's minutes to the terminal guide's
+// --record-stats mode, which merges them into the file on disk. The real helper runs
+// against a temp stats file, so the merge and the byte format are checked together.
+const shareRoot = fs.mkdtempSync(path.join(os.tmpdir(), "zen-share-"));
+const shareStats = path.join(shareRoot, "stats.json");
+const guideFile = path.join(__dirname, "..", "cli", "tb-guide");
+const persist = M.persistStatsCommand(guideFile, shareStats, "2026-11-11", 5);
+check("persistStatsCommand: argv runs the guide's --record-stats mode",
+  JSON.stringify(persist) ===
+    JSON.stringify(["python3", guideFile, "--record-stats", shareStats, "2026-11-11", "5"]));
+fs.writeFileSync(shareStats, '{"days":{"2026-11-10":3}}');
+const persistRun = spawnSync(persist[0], persist.slice(1), {
+  encoding: "utf8",
+  env: { ...process.env, HOME: shareRoot },
+});
+check("persistStatsCommand: merges into the file on disk, in the Zen byte format",
+  persistRun.status === 0 &&
+  fs.readFileSync(shareStats, "utf8") === '{"days":{"2026-11-10":3,"2026-11-11":5}}');
+fs.rmSync(shareRoot, { recursive: true, force: true });
+check("localPathOf: decodes a file URL to a local path",
+  M.localPathOf("file:///home/a%20b/cli/tb-guide") === "/home/a b/cli/tb-guide");
+check("localPathOf: anything else gives an empty path",
+  M.localPathOf("/tmp/x") === "" && M.localPathOf(undefined) === "" &&
+  M.localPathOf("file:///%E0%A4%A") === "");
+check("sessionSettings: the meditation log is on by default",
+  M.sessionSettings({}, {}).logEnabled === true);
+check("sessionSettings: a saved Off turns the log off, as a boolean or a string",
+  M.sessionSettings({}, { meditationLogEnabled: false }).logEnabled === false &&
+  M.sessionSettings({}, { meditationLogEnabled: "false" }).logEnabled === false);
+check("sessionSettings: a payload logEnabled wins over the saved value",
+  M.sessionSettings({ logEnabled: false }, { meditationLogEnabled: true }).logEnabled === false &&
+  M.sessionSettings({ logEnabled: true }, { meditationLogEnabled: false }).logEnabled === true);
+check("sessionSettings: junk logEnabled falls back to the saved value",
+  M.sessionSettings({ logEnabled: 0 }, { meditationLogEnabled: false }).logEnabled === false);
+check("sessionSettings: the saved Off is read from the bar entry",
+  M.sessionSettings({ minutes: 5 }, M.barEntrySettings(JSON.stringify([
+    { id: "aven.terminal-breather", meditationLogEnabled: false },
+  ]))).logEnabled === false);
+
 // DND goes through the notifications IPC; a regression to the in-process service
 // lookup (which returns null for a non-bar plugin) would leave DND silently off.
 // A fake omarchy-shell in a throwaway dir stands in for the real one: it logs its
@@ -444,8 +485,8 @@ fs.writeFileSync(
   '#!/bin/sh\necho "$@" >> "' + dndArgvLog + '"\nprintf "%s" "$FAKE_OUT"\nexit "$FAKE_STATUS"\n'
 );
 fs.chmodSync(fakeShell, 0o755);
-function runWithFakeShell(argv, out, status) {
-  const r = spawnSync(argv[0], argv.slice(1), {
+function runShell(argv, out, status) {
+  return spawnSync(argv[0], argv.slice(1), {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -454,7 +495,9 @@ function runWithFakeShell(argv, out, status) {
       FAKE_STATUS: String(status),
     },
   });
-  return r.stdout;
+}
+function runWithFakeShell(argv, out, status) {
+  return runShell(argv, out, status).stdout;
 }
 check("dndQueryCommand: queries the notifications IPC under a timeout",
   M.dndQueryCommand()[2].includes("timeout 5 omarchy-shell notifications isDnd"));
@@ -472,15 +515,60 @@ check("dndQuery: an empty answer reads as unknown",
   M.dndState(runWithFakeShell(M.dndQueryCommand(), "", 0)) === "unknown");
 check("dndQuery: error text reads as unknown",
   M.dndState(runWithFakeShell(M.dndQueryCommand(), "Target not found.\n", 0)) === "unknown");
-const setOn = M.dndSetCommand(true);
-const setOff = M.dndSetCommand(false);
-check("dndSetCommand: argv under a timeout, on and off",
-  JSON.stringify(setOn) === JSON.stringify(["timeout", "5", "omarchy-shell", "notifications", "setDnd", "on"]) &&
-  JSON.stringify(setOff) === JSON.stringify(["timeout", "5", "omarchy-shell", "notifications", "setDnd", "off"]));
-runWithFakeShell(setOff, "", 0);
-check("dndSetCommand(false) reaches omarchy-shell as setDnd off",
-  fs.readFileSync(dndArgvLog, "utf8").trim().split("\n").pop() === "notifications setDnd off");
+// Engage writes the marker before turning DND on, and restore removes it only when
+// the IPC succeeds, so a plugin that dies mid-session leaves the marker for the next
+// load. The real commands run against the fake shell and a temp state dir.
+const markerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "zen-marker-"));
+const markerPath = path.join(markerRoot, "state", "omarchy", "zen", "dnd-engaged.json");
+function argvLines() {
+  return fs.existsSync(dndArgvLog) ? fs.readFileSync(dndArgvLog, "utf8").trim().split("\n") : [];
+}
+function clearArgvLog() {
+  fs.rmSync(dndArgvLog, { force: true });
+}
+const engage = M.dndEngageCommand(markerPath);
+check("dndEngageCommand: sh -c with the marker path and body as arguments",
+  engage[0] === "sh" && engage[1] === "-c" && engage[3] === "sh" &&
+  engage[4] === markerPath && engage[5] === M.DND_MARKER_BODY);
+check("DND_MARKER_BODY: the restore target is off",
+  JSON.parse(M.DND_MARKER_BODY).restoreTo === "off");
+clearArgvLog();
+let engageRun = runShell(engage, "", 0);
+check("dndEngageCommand: writes the marker, then turns DND on",
+  engageRun.status === 0 && fs.readFileSync(markerPath, "utf8") === M.DND_MARKER_BODY &&
+  argvLines().join("|") === "notifications setDnd on");
+const blocker = path.join(markerRoot, "blocker");
+fs.writeFileSync(blocker, "");
+clearArgvLog();
+engageRun = runShell(M.dndEngageCommand(path.join(blocker, "dnd-engaged.json")), "", 0);
+check("dndEngageCommand: an unwritable marker keeps DND off",
+  engageRun.status !== 0 && argvLines().length === 0);
+const restore = M.dndRestoreCommand(markerPath, 0);
+check("dndRestoreCommand: argv carries the marker path and a zero wait pid",
+  restore[4] === markerPath && restore[5] === "0");
+clearArgvLog();
+let restoreRun = runShell(restore, "", 3);
+check("dndRestoreCommand: a failed IPC keeps the marker for the next load",
+  restoreRun.status !== 0 && fs.existsSync(markerPath));
+clearArgvLog();
+restoreRun = runShell(restore, "", 0);
+check("dndRestoreCommand: a successful IPC turns DND off and removes the marker",
+  restoreRun.status === 0 && !fs.existsSync(markerPath) &&
+  argvLines().join("|") === "notifications setDnd off");
+// A restore given the pid of a still-running engage waits for it to exit, so a late
+// engage cannot switch DND on after the restore has switched it off. The background
+// sleep starts after waitStart, so the restore must return at least 600 ms later.
+fs.writeFileSync(markerPath, M.DND_MARKER_BODY);
+const waitStart = Date.now();
+const sleeper = spawnSync("sh", ["-c", "sleep 0.6 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" });
+const enginePid = Number(sleeper.stdout.trim());
+clearArgvLog();
+restoreRun = runShell(M.dndRestoreCommand(markerPath, enginePid), "", 0);
+check("dndRestoreCommand: waits for a running engage before turning DND off",
+  restoreRun.status === 0 && Date.now() - waitStart >= 600 && !fs.existsSync(markerPath) &&
+  argvLines().join("|") === "notifications setDnd off");
 fs.rmSync(dndDir, { recursive: true, force: true });
+fs.rmSync(markerRoot, { recursive: true, force: true });
 
 // DND ownership transitions. dndRun feeds [event, live, wanted, arg] steps through
 // dndStep and returns each step's effects and the state after it.
@@ -570,5 +658,29 @@ check("dnd: a probe answering after the session ends engages nothing",
 const optOut = dndRun([["start", true, false], ["probed", true, false, "off"], ["end", false, false]]);
 check("dnd: an opted-out session never probes or engages",
   optOut.every((o) => o.fx.length === 0));
+
+// 10. Load-time recovery: an engage marker from an earlier run owes a restore before
+// any session starts, and a failed restore is retried by the next start.
+const recovered = dndRun([
+  ["recover", false, true, true],
+  ["restored", false, true, true],
+  ["start", true, true],
+]);
+check("dnd: a leftover engage marker restores DND at load",
+  recovered[0].fx.join() === "restore" && recovered[0].st.owned && recovered[0].st.busy);
+check("dnd: the recovered restore clears ownership", recovered[1].fx.join() === "refresh" && !recovered[1].st.owned);
+check("dnd: a session after the recovery probes normally", recovered[2].fx.join() === "probe");
+const noMarker = dndRun([["recover", false, true, false]]);
+check("dnd: no marker at load owes nothing", noMarker[0].fx.length === 0 && !noMarker[0].st.owned);
+const recoverFails = dndRun([
+  ["recover", false, true, true],
+  ["restored", false, true, false],
+  ["start", true, true],
+  ["restored", true, true, true],
+]);
+check("dnd: a failed recovery is retried by the next start, then the probe follows",
+  recoverFails[1].st.owned && !recoverFails[1].st.busy &&
+  recoverFails[2].fx.join() === "restore" && recoverFails[2].st.pendingProbe &&
+  recoverFails[3].fx.join() === "refresh,probe");
 
 console.log(`ZenModel tests: ${pass} passed${process.exitCode ? " (WITH FAILURES)" : ""}`);

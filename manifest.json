@@ -89,6 +89,12 @@
         ]
       },
       {
+        "key": "meditationLogEnabled",
+        "type": "boolean",
+        "label": "Write sessions to the Obsidian meditation log",
+        "defaultValue": true
+      },
+      {
         "key": "meditationLogPath",
         "type": "string",
         "label": "Obsidian meditation log file (empty = vault default)",
