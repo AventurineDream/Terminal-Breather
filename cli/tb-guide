@@ -17,8 +17,9 @@ default, or meditationLogPath from shell.json when set). Ending early still
 logs the minutes actually practiced. Sessions under a minute are not logged.
 
 The stats file is shared with omarchy-zen and other sessions, so every write
-re-reads it under a lock, adds the minutes, and replaces the file atomically
-(see add_stats_minutes). `tb-guide --record-stats PATH DAY MINUTES` is the
+re-reads it under a lock, adds only this session's minutes, checks that no
+other writer changed it meanwhile, and replaces the file atomically (see
+add_stats_minutes). `tb-guide --record-stats PATH DAY MINUTES` is the
 stats-only write the bar uses for the same merge.
 
 Usage: tb-guide [pattern] [minutes]
@@ -234,22 +235,29 @@ MINUTES_RE = re.compile(r"[1-9][0-9]{0,5}")
 def add_stats_minutes(path, day_key, minutes):
     """Adds minutes to one day of the stats file at path, safely against other writers.
 
-    The read, merge and write run under an exclusive flock on path + ".lock". The
-    lock sits on a sibling file because the stats file is replaced by rename, which
-    would orphan a lock held on it. The merge re-reads the file on disk, so minutes
-    that another session or omarchy-zen wrote since this process started are kept.
-    The new contents go to a temp file that is fsynced and renamed over path, so an
-    interrupted write leaves the previous file intact.
+    Cooperating writers (other sessions, the bar, tb-guide) serialise on an exclusive
+    flock on path + ".lock" (the shared-lock convention in the README). The lock sits
+    on a sibling file because the stats file is replaced by rename, which would orphan
+    a lock held on it.
 
-    Raises OSError when the file cannot be read or replaced; path is then unchanged.
+    omarchy-zen does not take that lock: it truncates the file and writes a whole
+    snapshot in place. So the write never trusts a snapshot. It reads the file on
+    disk, adds only these minutes to it (a delta merge), writes the result to a
+    fsynced temp file, then checks that the path still holds the inode and bytes it
+    read before renaming the temp file over it. A change in between means another
+    writer landed: the temp file is dropped and the merge starts again from the new
+    contents. After the rename it checks the replaced inode once more, because a
+    writer that opened the file just before the rename writes into that orphan; the
+    minutes such a write added are merged into the new file. See _merge_stats_delta.
+
+    Raises OSError when the file cannot be read or replaced, or when it kept changing
+    for STATS_WRITE_ATTEMPTS tries; path is then left as the other writer wrote it.
     Creates missing parent directories and keeps the file's permission bits.
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path + ".lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        stats, mode = _read_stats_locked(path)
-        stats = add_minutes(stats, day_key, minutes)
-        _replace_file(path, json.dumps(stats, separators=(",", ":")), mode)
+        _merge_stats_delta(path, {day_key: minutes})
 
 
 # A file that does not parse is re-read this many times, STATS_REREAD_DELAY
@@ -259,58 +267,221 @@ def add_stats_minutes(path, day_key, minutes):
 STATS_REREADS = 5
 STATS_REREAD_DELAY = 0.05
 
+# Merge attempts before a write gives up. An attempt is retried only when another
+# writer changed the file inside its read-to-rename window (a few milliseconds), so
+# needing this many means something is rewriting the file continuously; failing
+# then beats holding the lock in a loop.
+STATS_WRITE_ATTEMPTS = 8
+
+
+def _merge_stats_delta(path, delta):
+    """Adds delta ({day: minutes}) to the stats file at path; the caller holds the lock.
+
+    Each attempt reads the file, writes file + delta to a temp file and renames it
+    over path only if path still holds the inode and bytes that were read
+    (_replace_if_unchanged). A late write into the replaced inode is folded in by a
+    further attempt whose delta is the minutes that write added (_gained_minutes).
+
+    Raises OSError on read or write failure, or after STATS_WRITE_ATTEMPTS attempts.
+    """
+    pending = delta
+    for _ in range(STATS_WRITE_ATTEMPTS):
+        stats, mode, raw, fd = _read_stats_locked(path)
+        try:
+            merged = stats
+            for day_key, minutes in pending.items():
+                merged = add_minutes(merged, day_key, minutes)
+            text = json.dumps(merged, separators=(",", ":"))
+            if not _replace_if_unchanged(path, text, mode, fd, raw):
+                continue
+            late = _late_write(path, fd, raw)
+        finally:
+            os.close(fd)
+        if late is None:
+            return
+        pending = _gained_minutes(stats, late)
+        if not pending:
+            return
+    raise OSError("%s kept changing under another writer; gave up after %d attempts"
+                  % (path, STATS_WRITE_ATTEMPTS))
+
+
+def _gained_minutes(base, later):
+    """The minutes later holds beyond base, per day, as a delta for another merge.
+
+    Only increases count. A day that is lower (or missing) in later comes from a
+    snapshot taken before base was written, not from minutes being taken away, so
+    it must not subtract from the totals already on disk.
+    """
+    gained = {}
+    base_days = base.get("days", {})
+    for day_key, value in later.get("days", {}).items():
+        extra = _minutes_of(value) - _minutes_of(base_days.get(day_key))
+        if extra > 0:
+            gained[day_key] = extra
+    return gained
+
+
+def _read_all(fd):
+    """The whole current contents of the file open at fd, read from offset 0."""
+    chunks = []
+    offset = 0
+    while True:
+        chunk = os.pread(fd, 65536, offset)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        offset += len(chunk)
+
+
+def _open_stats(path):
+    """Opens path (creating it empty, 0644 less the umask, when missing) and reads it,
+    re-reading unparseable text up to STATS_REREADS times so that an in-place write
+    caught half-way is read once it lands. Returns (fd, raw, stats), where stats is
+    None when raw is still empty or not a stats file. The caller closes fd.
+
+    The missing file is created rather than left missing so that a first write by
+    omarchy-zen, which opens the path with O_CREAT|O_TRUNC, lands in an inode this
+    writer holds open and can check after its rename.
+    """
+    fd = None
+    try:
+        for attempt in range(STATS_REREADS + 1):
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            fd = os.open(path, os.O_RDONLY | os.O_CREAT, 0o644)
+            raw = _read_all(fd)
+            stats = parse_stats_strict(raw) if raw.strip() else None
+            if stats is not None:
+                break
+            if attempt < STATS_REREADS:
+                time.sleep(STATS_REREAD_DELAY)
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        raise
+    return fd, raw, stats
+
 
 def _read_stats_locked(path):
-    """Reads the stats file for a locked merge and returns (stats, mode).
+    """Reads the stats file for a locked merge and returns (stats, mode, raw, fd).
 
-    A missing file gives empty stats and the default mode 0644. Empty or unparseable
-    text is re-read a few times first (see STATS_REREADS), so an unlocked omarchy-zen
-    write caught half-way is read once it lands rather than treated as no history.
-    A file still empty after that holds no history and gives empty stats. A file still
-    not a stats file (a truncated write from an older, non-atomic writer, say) is
-    renamed to path + ".corrupt-<time>" rather than overwritten, so its history can
-    still be recovered by hand. Other read errors propagate, so nothing is written over
+    fd stays open on the inode that was read, and raw is the exact bytes read from
+    it; the caller compares both with the path before and after replacing it, then
+    closes fd. A missing file is created empty (see _open_stats). Empty text holds no
+    history and gives empty stats. Unparseable text is re-read a few times first
+    (see STATS_REREADS); a file still not a stats file (a truncated write from an
+    older, non-atomic writer, say) is renamed to path + ".corrupt-<time>" rather than
+    overwritten, so its history can still be recovered by hand, and the merge starts
+    from a fresh empty file. Other read errors propagate, so nothing is written over
     a file that was not read.
     """
-    for attempt in range(STATS_REREADS + 1):
-        try:
-            mode = stat.S_IMODE(os.stat(path).st_mode)
-            with open(path, "rb") as f:
-                raw = f.read()
-        except FileNotFoundError:
-            return {"days": {}}, 0o644
-        stats = parse_stats_strict(raw) if raw.strip() else None
-        if stats is not None:
-            return stats, mode
-        if attempt < STATS_REREADS:
-            time.sleep(STATS_REREAD_DELAY)
-    if not raw.strip():
-        return {"days": {}}, mode
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    os.replace(path, "%s.corrupt-%s" % (path, stamp))
-    return {"days": {}}, mode
-
-
-def _replace_file(path, text, mode):
-    """Writes text to a temp file beside path, fsyncs it, and renames it over path,
-    so a reader sees either the old file or the new one, never a partial write.
-    The temp file is removed on any failure before the rename."""
-    directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+    fd, raw, stats = _open_stats(path)
+    if stats is None and raw.strip():
+        os.close(fd)
+        _set_aside(path)
+        fd, raw, stats = _open_stats(path)
+        if stats is None and raw.strip():
+            os.close(fd)
+            raise OSError("%s is not a stats file" % path)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        mode = stat.S_IMODE(os.fstat(fd).st_mode)
+    except BaseException:
+        os.close(fd)
+        raise
+    return (stats if stats is not None else {"days": {}}), mode, raw, fd
+
+
+def _corrupt_path(path):
+    """The name a stats file that does not parse is kept under: path.corrupt-<time>."""
+    return "%s.corrupt-%s" % (path, datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+
+def _set_aside(path):
+    """Renames the unparseable stats file at path to its .corrupt-<time> name."""
+    os.replace(path, _corrupt_path(path))
+
+
+def _still_current(path, fd, raw):
+    """Whether path still names the inode open at fd and that inode still holds raw.
+
+    The bytes are compared in full rather than by size or mtime: an in-place
+    rewrite of the same length within one timestamp tick would pass those."""
+    try:
+        on_path = os.stat(path)
+    except FileNotFoundError:
+        return False
+    held = os.fstat(fd)
+    if (on_path.st_dev, on_path.st_ino) != (held.st_dev, held.st_ino):
+        return False
+    return _read_all(fd) == raw
+
+
+def _replace_if_unchanged(path, text, mode, fd, raw):
+    """Writes text to a fsynced temp file beside path and renames it over path,
+    unless path no longer holds what was read (see _still_current).
+
+    The check runs after the slow part (the temp write and fsync), right before the
+    rename, so the window in which an unlocked writer can still slip in is the
+    check and the rename syscall alone; _late_write covers that window afterwards.
+    A reader sees either the old file or the new one, never a partial write.
+
+    Returns True when path was replaced, False when it changed and was left alone.
+    The temp file is removed whenever path is not replaced.
+    """
+    directory = os.path.dirname(path) or "."
+    fd_tmp, tmp = tempfile.mkstemp(dir=directory, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+    replaced = False
+    try:
+        with os.fdopen(fd_tmp, "w", encoding="utf-8") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except BaseException:
+        if _still_current(path, fd, raw):
+            os.replace(tmp, path)
+            replaced = True
+    finally:
+        if not replaced:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    if replaced:
+        _fsync_dir(directory)
+    return replaced
+
+
+def _late_write(path, fd, raw):
+    """Checks the inode a rename just replaced for a write that reached it too late.
+
+    An unlocked writer that opened the file just before the rename writes into
+    that inode, which no longer has a name, so its minutes would vanish. When the
+    inode no longer holds raw, the late write is re-read until it parses (it may be
+    a truncate caught before its write) and returned as stats for the caller to
+    merge. Returns None when nothing changed or the late write left nothing usable:
+    a write still empty after the re-reads carried nothing to keep, and unparseable
+    bytes are copied to path.corrupt-<time> for recovery by hand.
+    """
+    now = _read_all(fd)
+    if now == raw:
+        return None
+    for attempt in range(STATS_REREADS + 1):
+        stats = parse_stats_strict(now) if now.strip() else None
+        if stats is not None:
+            return stats
+        if attempt < STATS_REREADS:
+            time.sleep(STATS_REREAD_DELAY)
+            now = _read_all(fd)
+    if now.strip():
+        # "x": a .corrupt copy already made this second is kept, not written over.
         try:
-            os.unlink(tmp)
-        except OSError:
+            with open(_corrupt_path(path), "xb") as f:
+                f.write(now)
+        except FileExistsError:
             pass
-        raise
-    _fsync_dir(directory)
+    return None
 
 
 def _fsync_dir(directory):

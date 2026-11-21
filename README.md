@@ -110,9 +110,33 @@ omarchy bar set aven.terminal-breather meditationLogPath "$HOME/notes/meditation
 omarchy bar set aven.terminal-breather meditationLogEnabled false
 ```
 
-Practice minutes and streaks are stored in `stats.json` under Omarchy's local plugin state (`~/.local/state/omarchy/zen/`). That is the same file omarchy-zen uses, so both plugins share one history. Each write re-reads the file under a lock, adds the new minutes, and replaces the file atomically, so concurrent sessions and `tb-guide` do not lose each other's entries. omarchy-zen writes its file without that lock, so its own writes can still overwrite a concurrent update.
+Practice minutes and streaks are stored in `stats.json` under Omarchy's local plugin state (`~/.local/state/omarchy/zen/`). That is the same file omarchy-zen uses, so both plugins share one history. Each write re-reads the file under a lock, adds only the new minutes, and replaces the file atomically, so concurrent sessions and `tb-guide` do not lose each other's entries.
+
+omarchy-zen writes its whole in-memory snapshot in place without that lock. Terminal Breather does not overwrite omarchy-zen's minutes: right before it renames the merged file into place, it checks that the file still holds the bytes it read and starts the merge again if not. A write that reaches the old file just after the rename is read back and merged in. The other direction stays open: if an omarchy-zen session ends in the few milliseconds after a Terminal Breather write lands and before omarchy-zen reloads the file, omarchy-zen's snapshot overwrites those minutes. That gap closes only when omarchy-zen follows the convention below.
 
 The optional meditation log appends a row for sessions of at least one minute, including sessions ended early. Set `meditationLogEnabled` to `false` to turn it off; minutes and streaks are still counted. With `meditationLogPath` empty, the log is `~/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md`; set it to any absolute path to use another note. The log does not create a missing parent folder: if the folder is absent, the row is skipped silently.
+
+### Shared stats file convention
+
+Any program that adds minutes to `~/.local/state/omarchy/zen/stats.json` can follow these rules so that no writer loses another's minutes. Terminal Breather follows them, and a writer that ignores them is no worse off than before:
+
+1. Take an exclusive `flock` on the sibling file `stats.json.lock`. Open it for appending and create it when it's missing, and never delete or rename it. The lock must not be held on `stats.json` itself, because that file gets replaced.
+2. While holding the lock, read `stats.json` as it is on disk and add your minutes to it. Never write a snapshot kept in memory from an earlier read.
+3. Write the result to a temp file in the same directory, then `rename` it over `stats.json`, so that readers never see a partial file.
+4. Keep the format `{"days":{"YYYY-MM-DD":minutes,...}}`. If the file doesn't parse, leave it alone or set it aside, but don't overwrite it.
+
+For example, omarchy-zen's persist command (`sh -c '…' sh PATH DAY MINUTES`) could do this with `flock` and `jq`, both in Omarchy's base install:
+
+```sh
+f="$1"; mkdir -p "${f%/*}" && exec 9>>"$f.lock" && flock 9 || exit 1
+[ -s "$f" ] || printf '{"days":{}}' > "$f"
+t=$(mktemp "$f.XXXXXX") || exit 1
+if jq -c --arg d "$2" --argjson m "$3" '{days: ((.days // {}) | .[$d] = ((((.[$d] // 0) | tonumber? // 0) + $m) | round))}' "$f" > "$t"; then
+  chmod 644 "$t" && mv -f "$t" "$f"
+else
+  rm -f "$t"; exit 1
+fi
+```
 
 ## Video
 
@@ -126,6 +150,7 @@ The optional meditation log appends a row for sessions of at least one minute, i
 - The default meditation-log path follows the vault rename: `~/Projects/Obsidian/Home/…` → `~/Projects/Obsidian/Aventurine/…`.
 - Hardened session inputs: phase, ramp, and session durations are bounded, and custom-pattern validation matches the overlay. A Do Not Disturb restore now waits for the engage step, so DND can no longer be left on after a session.
 - Practice minutes are merged into the shared `stats.json` under a lock and written atomically: the bar hands its minutes to `tb-guide --record-stats`, so concurrent sessions, the terminal guide, and a crash mid-write no longer lose or truncate history. The file format is unchanged.
+- Shared history is protected against omarchy-zen's unlocked writes. Before Terminal Breather renames its merged file into place, it checks that `stats.json` still holds the bytes it read; if they changed, it merges again from the new contents, with a bounded number of retries. After the rename, it also reads back a write that landed in the file it just replaced and merges those minutes in. A missing `stats.json` is created empty first, so that even omarchy-zen's first write lands in a file that can be checked. The lock convention is documented above so that omarchy-zen can adopt it.
 - Do Not Disturb is restored after an abrupt disable, removal, or crash. The engage step writes `~/.local/state/omarchy/zen/dnd-engaged.json` before turning DND on; the next load turns DND back off when that file is present.
 - New `meditationLogEnabled` setting (default on) turns off the Obsidian meditation log. Minutes and streaks are still counted. The Settings panel has an On/Off switch, and `tb-guide` honours the same key.
 - The saved bar settings are read from the `aven.terminal-breather` entry again. The overlay had still looked up the old `luotao.zen` id after the rename, so saved settings were ignored for summons that name only some keys.

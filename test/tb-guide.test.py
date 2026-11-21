@@ -473,6 +473,166 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a half-written stats file that lands is not set aside as corrupt",
           not [n for n in os.listdir(tmp) if ".corrupt-" in n])
 
+# --- an unlocked omarchy-zen write landing mid-write ---
+# omarchy-zen (upstream luotao.zen) keeps the file in memory, adds its minutes, and
+# writes the whole snapshot in place with this command, without the lock.
+ZEN_PERSIST = 'mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1"'
+
+
+def zen_session(path, day, minutes):
+    """One omarchy-zen session end: its (fresh) snapshot plus minutes, written in place."""
+    try:
+        with open(path) as f:
+            snapshot = parse_stats(f.read())
+    except OSError:
+        snapshot = {"days": {}}
+    stats = add_minutes(snapshot, day, minutes)
+    subprocess.run(["sh", "-c", ZEN_PERSIST, "sh", path, json.dumps(stats, separators=(",", ":"))],
+                   check=True)
+
+
+def with_hook(which, before, calls=1, when=lambda *a: True):
+    """Patches os.<which> so its first `calls` matching calls run before() first.
+    Returns a function that restores the real os.<which>."""
+    real = getattr(os, which)
+    left = {"n": calls}
+
+    def hooked(*args, **kwargs):
+        if left["n"] > 0 and when(*args):
+            left["n"] -= 1
+            before()
+        return real(*args, **kwargs)
+
+    setattr(os, which, hooked)
+    return lambda: setattr(os, which, real)
+
+
+def is_temp_rename(src, dst, *rest):
+    return str(src).endswith(".tmp")
+
+
+def read_days(path):
+    with open(path) as f:
+        return json.load(f)["days"]
+
+
+def leftovers(directory):
+    return sorted(n for n in os.listdir(directory) if n not in ("stats.json", "stats.json.lock"))
+
+
+# Zen lands after the read, while the merged copy is being written and fsynced: the
+# copy is dropped, and the merge reruns on Zen's file. Both sessions' minutes stay.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":3}}')
+    restore = with_hook("fsync", lambda: zen_session(stats_path, "2026-11-11", 5))
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+    finally:
+        restore()
+    check("zen write before the rename: zen's and breather's minutes both kept",
+          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": 7})
+    check("zen write before the rename: the dropped copy leaves no temp file",
+          leftovers(tmp) == [])
+
+# Zen opens the file just before the rename and writes into the replaced inode: the
+# late write is read back from that inode and its minutes merged into the new file.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":3}}')
+    restore = with_hook("replace", lambda: zen_session(stats_path, "2026-11-11", 5),
+                        when=is_temp_rename)
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+    finally:
+        restore()
+    check("zen write into the replaced file: zen's and breather's minutes both kept",
+          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": 7})
+    check("zen write into the replaced file: no temp or corrupt file left", leftovers(tmp) == [])
+
+# The same, with Zen's truncate caught before its write lands: the replaced inode is
+# re-read until the write arrives.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":3}}')
+    writers = []
+
+    def zen_truncate_then_write():
+        f = open(stats_path, "r+")
+        f.truncate(0)
+
+        def finish():
+            time.sleep(0.08)
+            f.write('{"days":{"2026-11-10":3,"2026-11-11":5}}')
+            f.close()
+
+        writers.append(threading.Thread(target=finish))
+        writers[0].start()
+
+    restore = with_hook("replace", zen_truncate_then_write, when=is_temp_rename)
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+    finally:
+        restore()
+    writers[0].join()
+    check("zen write landing late in the replaced file: both sessions' minutes kept",
+          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": 7})
+
+# A late Zen write from a snapshot older than the file does not take minutes away:
+# only what it added is merged, so the day it lacks keeps its total.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":3}}')
+
+    def stale_zen():
+        subprocess.run(["sh", "-c", ZEN_PERSIST, "sh", stats_path, '{"days":{"2026-11-11":5}}'],
+                       check=True)
+
+    restore = with_hook("replace", stale_zen, when=is_temp_rename)
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+    finally:
+        restore()
+    check("a stale late zen write adds its minutes without dropping other days",
+          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": 7})
+
+# No stats file yet, and Zen's first write lands in the window: it goes into the
+# empty file this writer created and holds, so its minutes are merged too.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    restore = with_hook("replace", lambda: zen_session(stats_path, "2026-11-11", 4),
+                        when=is_temp_rename)
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+    finally:
+        restore()
+    check("zen's first-ever write racing breather's: both sessions' minutes kept",
+          read_days(stats_path) == {"2026-11-11": 6})
+
+# A file that changes on every attempt: the write gives up with an error rather than
+# replacing it, and the other writer's history is left exactly as it wrote it.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":3}}')
+    attempts = _ns["STATS_WRITE_ATTEMPTS"]
+    restore = with_hook("fsync", lambda: zen_session(stats_path, "2026-11-11", 1), calls=attempts)
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+        gave_up = False
+    except OSError:
+        gave_up = True
+    finally:
+        restore()
+    check("a file changing on every attempt makes the write fail", gave_up)
+    check("a file changing on every attempt is never written over",
+          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": attempts})
+    check("a write that gave up leaves no temp file", leftovers(tmp) == [])
+
 # The writer keeps the file's mode, and creates a new file (and its folders) at 0644.
 with tempfile.TemporaryDirectory() as tmp:
     stats_path = os.path.join(tmp, "stats.json")
