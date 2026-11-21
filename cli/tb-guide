@@ -250,8 +250,10 @@ def add_stats_minutes(path, day_key, minutes):
     writer that opened the file just before the rename writes into that orphan; the
     minutes such a write added are merged into the new file. See _merge_stats_delta.
 
-    Raises OSError when the file cannot be read or replaced, or when it kept changing
-    for STATS_WRITE_ATTEMPTS tries; path is then left as the other writer wrote it.
+    Raises OSError when these minutes could not be recorded: the file cannot be read
+    or replaced, or it kept changing for STATS_WRITE_ATTEMPTS tries (path is then left
+    as the other writer wrote it). Once these minutes are in the file, a failure to
+    fold in a late write is reported on stderr instead, since this write succeeded.
     Creates missing parent directories and keeps the file's permission bits.
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -267,10 +269,11 @@ def add_stats_minutes(path, day_key, minutes):
 STATS_REREADS = 5
 STATS_REREAD_DELAY = 0.05
 
-# Merge attempts before a write gives up. An attempt is retried only when another
-# writer changed the file inside its read-to-rename window (a few milliseconds), so
-# needing this many means something is rewriting the file continuously; failing
-# then beats holding the lock in a loop.
+# Merge attempts before a write gives up. An attempt is retried when another writer
+# changed the file between its read and its rename (a window that includes the temp
+# write and fsync, so its length depends on the disk), and a further attempt merges
+# a late write into the replaced file. Needing this many means something is
+# rewriting the file continuously; stopping then beats holding the lock in a loop.
 STATS_WRITE_ATTEMPTS = 8
 
 
@@ -282,28 +285,53 @@ def _merge_stats_delta(path, delta):
     (_replace_if_unchanged). A late write into the replaced inode is folded in by a
     further attempt whose delta is the minutes that write added (_gained_minutes).
 
-    Raises OSError on read or write failure, or after STATS_WRITE_ATTEMPTS attempts.
+    Raises OSError on read or write failure, or after STATS_WRITE_ATTEMPTS attempts,
+    only while delta itself is not yet in the file. After that, the remaining work is
+    another writer's late minutes, and a failure to merge them goes to stderr.
     """
     pending = delta
+    recorded = False
     for _ in range(STATS_WRITE_ATTEMPTS):
-        stats, mode, raw, fd = _read_stats_locked(path)
+        replaced = False
         try:
-            merged = stats
-            for day_key, minutes in pending.items():
-                merged = add_minutes(merged, day_key, minutes)
-            text = json.dumps(merged, separators=(",", ":"))
-            if not _replace_if_unchanged(path, text, mode, fd, raw):
-                continue
-            late = _late_write(path, fd, raw)
-        finally:
-            os.close(fd)
+            stats, mode, raw, fd = _read_stats_locked(path)
+            try:
+                merged = stats
+                for day_key, minutes in pending.items():
+                    merged = add_minutes(merged, day_key, minutes)
+                text = json.dumps(merged, separators=(",", ":"))
+                if not _replace_if_unchanged(path, text, mode, fd, raw):
+                    continue
+                recorded = replaced = True
+                late = _late_write(path, fd, raw, mode)
+            finally:
+                os.close(fd)
+        except OSError as e:
+            if not recorded:
+                raise
+            # After this pass's rename, pending is in the file and the late write
+            # that could not be read is of unknown size.
+            _warn_unmerged(path, None if replaced else pending, e)
+            return
         if late is None:
             return
         pending = _gained_minutes(stats, late)
         if not pending:
             return
+    if recorded:
+        _warn_unmerged(path, pending, "gave up after %d attempts" % STATS_WRITE_ATTEMPTS)
+        return
     raise OSError("%s kept changing under another writer; gave up after %d attempts"
                   % (path, STATS_WRITE_ATTEMPTS))
+
+
+def _warn_unmerged(path, pending, reason):
+    """Reports on stderr that another writer's late minutes did not reach path.
+    pending is the delta that was being merged, or None when its size is unknown;
+    reason is the error or cause."""
+    amount = "some" if pending is None else "%d" % round(sum(pending.values()))
+    sys.stderr.write("tb-guide: %s: %s minute(s) another writer added late were not merged: %s\n"
+                     % (path, amount, reason))
 
 
 def _gained_minutes(base, later):
@@ -372,35 +400,43 @@ def _read_stats_locked(path):
     closes fd. A missing file is created empty (see _open_stats). Empty text holds no
     history and gives empty stats. Unparseable text is re-read a few times first
     (see STATS_REREADS); a file still not a stats file (a truncated write from an
-    older, non-atomic writer, say) is renamed to path + ".corrupt-<time>" rather than
-    overwritten, so its history can still be recovered by hand, and the merge starts
-    from a fresh empty file. Other read errors propagate, so nothing is written over
-    a file that was not read.
+    older, non-atomic writer, say) is copied to path + ".corrupt-<time>" so its
+    history can still be recovered by hand, and the merge starts from empty stats.
+    The file is copied rather than renamed so that the usual check before the
+    replace still applies: if another writer finishes a valid write in the
+    meantime, the replace is refused and the merge reruns on that write. Other read
+    errors propagate, so nothing is written over a file that was not read.
     """
     fd, raw, stats = _open_stats(path)
-    if stats is None and raw.strip():
-        os.close(fd)
-        _set_aside(path)
-        fd, raw, stats = _open_stats(path)
-        if stats is None and raw.strip():
-            os.close(fd)
-            raise OSError("%s is not a stats file" % path)
     try:
         mode = stat.S_IMODE(os.fstat(fd).st_mode)
+        if stats is None and raw.strip():
+            _save_corrupt(path, raw, mode)
     except BaseException:
         os.close(fd)
         raise
     return (stats if stats is not None else {"days": {}}), mode, raw, fd
 
 
-def _corrupt_path(path):
-    """The name a stats file that does not parse is kept under: path.corrupt-<time>."""
-    return "%s.corrupt-%s" % (path, datetime.now().strftime("%Y%m%d-%H%M%S"))
-
-
-def _set_aside(path):
-    """Renames the unparseable stats file at path to its .corrupt-<time> name."""
-    os.replace(path, _corrupt_path(path))
+def _save_corrupt(path, data, mode):
+    """Writes data, the bytes of a stats file that does not parse, to a new file
+    path.corrupt-<time> (with -1, -2, ... appended when that name is taken), so no
+    earlier copy is ever written over. Returns the name used."""
+    base = "%s.corrupt-%s" % (path, datetime.now().strftime("%Y%m%d-%H%M%S"))
+    name = base
+    n = 0
+    while True:
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+            break
+        except FileExistsError:
+            n += 1
+            name = "%s-%d" % (base, n)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    return name
 
 
 def _still_current(path, fd, raw):
@@ -453,16 +489,19 @@ def _replace_if_unchanged(path, text, mode, fd, raw):
     return replaced
 
 
-def _late_write(path, fd, raw):
+def _late_write(path, fd, raw, mode):
     """Checks the inode a rename just replaced for a write that reached it too late.
 
     An unlocked writer that opened the file just before the rename writes into
     that inode, which no longer has a name, so its minutes would vanish. When the
     inode no longer holds raw, the late write is re-read until it parses (it may be
     a truncate caught before its write) and returned as stats for the caller to
-    merge. Returns None when nothing changed or the late write left nothing usable:
-    a write still empty after the re-reads carried nothing to keep, and unparseable
-    bytes are copied to path.corrupt-<time> for recovery by hand.
+    merge. This check runs once, right after the rename, and the re-reads last at
+    most STATS_REREADS * STATS_REREAD_DELAY seconds; a write that lands after that is
+    not seen. Returns None when nothing changed or the late write left nothing
+    usable: a write still empty after the re-reads carried nothing to keep, and
+    unparseable bytes are saved with _save_corrupt (mode is the replaced file's) for
+    recovery by hand.
     """
     now = _read_all(fd)
     if now == raw:
@@ -475,12 +514,7 @@ def _late_write(path, fd, raw):
             time.sleep(STATS_REREAD_DELAY)
             now = _read_all(fd)
     if now.strip():
-        # "x": a .corrupt copy already made this second is kept, not written over.
-        try:
-            with open(_corrupt_path(path), "xb") as f:
-                f.write(now)
-        except FileExistsError:
-            pass
+        _save_corrupt(path, now, mode)
     return None
 
 

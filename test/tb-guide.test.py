@@ -8,6 +8,7 @@ session. The shared stats file is also exercised end to end through the
 `--record-stats` CLI, against temp HOME directories. No shell needed.
 """
 
+import io
 import json
 import os
 import re
@@ -491,10 +492,10 @@ def zen_session(path, day, minutes):
                    check=True)
 
 
-def with_hook(which, before, calls=1, when=lambda *a: True):
-    """Patches os.<which> so its first `calls` matching calls run before() first.
-    Returns a function that restores the real os.<which>."""
-    real = getattr(os, which)
+def with_hook(which, before, calls=1, when=lambda *a: True, module=os):
+    """Patches module.<which> (os by default) so its first `calls` matching calls run
+    before() first. Returns a function that restores the real module.<which>."""
+    real = getattr(module, which)
     left = {"n": calls}
 
     def hooked(*args, **kwargs):
@@ -503,8 +504,8 @@ def with_hook(which, before, calls=1, when=lambda *a: True):
             before()
         return real(*args, **kwargs)
 
-    setattr(os, which, hooked)
-    return lambda: setattr(os, which, real)
+    setattr(module, which, hooked)
+    return lambda: setattr(module, which, real)
 
 
 def is_temp_rename(src, dst, *rest):
@@ -553,33 +554,57 @@ with tempfile.TemporaryDirectory() as tmp:
     check("zen write into the replaced file: no temp or corrupt file left", leftovers(tmp) == [])
 
 # The same, with Zen's truncate caught before its write lands: the replaced inode is
-# re-read until the write arrives.
+# re-read until the write arrives. The write lands in the first re-read's sleep, so
+# the test does not race a timer.
 with tempfile.TemporaryDirectory() as tmp:
     stats_path = os.path.join(tmp, "stats.json")
     with open(stats_path, "w") as f:
         f.write('{"days":{"2026-11-10":3}}')
-    writers = []
+    zen_file = []
 
-    def zen_truncate_then_write():
-        f = open(stats_path, "r+")
-        f.truncate(0)
+    def zen_truncate():
+        zen_file.append(open(stats_path, "r+"))
+        zen_file[0].truncate(0)
 
-        def finish():
-            time.sleep(0.08)
-            f.write('{"days":{"2026-11-10":3,"2026-11-11":5}}')
-            f.close()
+    def zen_finish_write():
+        zen_file[0].write('{"days":{"2026-11-10":3,"2026-11-11":5}}')
+        zen_file[0].close()
 
-        writers.append(threading.Thread(target=finish))
-        writers[0].start()
+    restores = [with_hook("replace", zen_truncate, when=is_temp_rename),
+                with_hook("sleep", zen_finish_write, module=time)]
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+    finally:
+        for restore in restores:
+            restore()
+    check("zen write landing late in the replaced file: both sessions' minutes kept",
+          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": 7})
 
-    restore = with_hook("replace", zen_truncate_then_write, when=is_temp_rename)
+# A corrupt file that Zen rewrites validly while it is being set aside: the copy is
+# kept, but the replace is refused and the merge reruns on Zen's write, so Zen's
+# history stays in stats.json rather than ending up in the .corrupt copy.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    truncated = '{"days":{"2026-11-10":'
+    with open(stats_path, "w") as f:
+        f.write(truncated)
+
+    def zen_repairs():
+        subprocess.run(["sh", "-c", ZEN_PERSIST, "sh", stats_path, '{"days":{"2026-11-10":7}}'],
+                       check=True)
+
+    # The first fsync is the .corrupt copy's.
+    restore = with_hook("fsync", zen_repairs)
     try:
         add_stats_minutes(stats_path, "2026-11-11", 2)
     finally:
         restore()
-    writers[0].join()
-    check("zen write landing late in the replaced file: both sessions' minutes kept",
-          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": 7})
+    check("a valid zen write during the corrupt set-aside stays in stats.json",
+          read_days(stats_path) == {"2026-11-10": 7, "2026-11-11": 2})
+    backups = [n for n in os.listdir(tmp) if n.startswith("stats.json.corrupt-")]
+    with open(os.path.join(tmp, backups[0])) as f:
+        check("the .corrupt copy made before zen's write keeps the bad bytes",
+              len(backups) == 1 and f.read() == truncated)
 
 # A late Zen write from a snapshot older than the file does not take minutes away:
 # only what it added is merged, so the day it lacks keeps its total.
@@ -632,6 +657,31 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a file changing on every attempt is never written over",
           read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": attempts})
     check("a write that gave up leaves no temp file", leftovers(tmp) == [])
+
+# A late write into the replaced file on every attempt: this session's minutes are
+# recorded and the call succeeds, every late write but the last is merged, and the
+# one left over is reported on stderr rather than dropped silently.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":3}}')
+    attempts = _ns["STATS_WRITE_ATTEMPTS"]
+    restore = with_hook("replace", lambda: zen_session(stats_path, "2026-11-11", 1),
+                        calls=attempts, when=is_temp_rename)
+    real_stderr, sys.stderr = sys.stderr, io.StringIO()
+    try:
+        add_stats_minutes(stats_path, "2026-11-11", 2)
+        raised = False
+    except OSError:
+        raised = True
+    finally:
+        warning, sys.stderr = sys.stderr.getvalue(), real_stderr
+        restore()
+    check("late writes on every attempt: the session's own write still succeeds", not raised)
+    check("late writes on every attempt: all but the last late minute are merged",
+          read_days(stats_path) == {"2026-11-10": 3, "2026-11-11": 2 + attempts - 1})
+    check("late writes on every attempt: the unmerged minute is reported",
+          "1 minute(s) another writer added late were not merged" in warning)
 
 # The writer keeps the file's mode, and creates a new file (and its folders) at 0644.
 with tempfile.TemporaryDirectory() as tmp:
