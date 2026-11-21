@@ -17,7 +17,11 @@ Panel {
   manageIpc: false
 
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
-  readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
+  // Breather's own history. omarchy-zen's file is only the first-run seed (see statsSeed).
+  readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/aven.terminal-breather/stats.json"
+  readonly property string zenStatsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
+  // The terminal guide, whose --seed-stats mode makes the first-run copy. Resolved from this plugin's directory.
+  readonly property string guidePath: Model.localPathOf(Qt.resolvedUrl("cli/tb-guide"))
   readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -129,6 +133,17 @@ Panel {
   // actually looked at. The log-path field is reset to the current setting
   // on open, so it never shows a stale half-typed value.
   onOpenedChanged: if (opened) { statsFile.reload(); patternsFile.reload(); logPathField.text = String(setting("meditationLogPath", "")) }
+
+  // First run: copies omarchy-zen's history into Breather's own stats file, a no-op
+  // once that file exists (the overlay runs the same step; the lock serialises them).
+  // The reload afterwards shows the carried-over streak in the tooltip and the
+  // status command without waiting for the panel to open.
+  Process {
+    id: statsSeed
+    command: Model.seedStatsCommand(root.guidePath, root.statsPath, root.zenStatsPath)
+    running: true
+    onExited: statsFile.reload()
+  }
 
   FileView {
     id: statsFile

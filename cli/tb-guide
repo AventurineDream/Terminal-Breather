@@ -11,18 +11,25 @@ scales with the breath — with a colour that shifts by phase.
 
 Sessions that reach at least one minute are logged exactly the way the
 overlay logs them: minutes added to today's entry in
-~/.local/state/omarchy/zen/stats.json, and, unless meditationLogEnabled is
-false in shell.json, one row appended to the meditation log (the vault
-default, or meditationLogPath from shell.json when set). Ending early still
-logs the minutes actually practiced. Sessions under a minute are not logged.
+~/.local/state/omarchy/aven.terminal-breather/stats.json, and, unless
+meditationLogEnabled is false in shell.json, one row appended to the
+meditation log (the vault default, or meditationLogPath from shell.json when
+set). Ending early still logs the minutes actually practiced. Sessions under a
+minute are not logged.
 
-The stats file is shared with omarchy-zen and other sessions, so every write
-re-reads it under a lock, adds the minutes, and replaces the file atomically
-(see add_stats_minutes). `tb-guide --record-stats PATH DAY MINUTES` is the
-stats-only write the bar uses for the same merge.
+The stats file is Breather's own; omarchy-zen keeps its separate
+~/.local/state/omarchy/zen/stats.json. On the first run, when Breather's file
+does not exist yet, it is created from a copy of Zen's file so existing
+totals carry over once; Zen's file is only read, and never again after that
+(see seed_stats). The overlay, the bar and this guide all write Breather's
+file, so every write re-reads it under a lock, adds the minutes, and replaces
+the file atomically (see add_stats_minutes). `tb-guide --record-stats` is the
+stats-only write the overlay uses for the same merge, and `tb-guide --seed-stats`
+the first-run copy the bar and overlay run when they load.
 
 Usage: tb-guide [pattern] [minutes]
-       tb-guide --record-stats PATH YYYY-MM-DD MINUTES
+       tb-guide --record-stats PATH YYYY-MM-DD MINUTES [SEED]
+       tb-guide --seed-stats PATH SEED
   pattern  box (default), 478, coherent, or a custom key from
            ~/.config/omarchy/zen/patterns.json
   minutes  session length (default 5, max 120)
@@ -89,7 +96,9 @@ MIN_RADIUS = 1.5
 
 # ---- Session logging, mirroring ZenModel.js / BreatheOverlay.qml ----
 # Stats are stored as {"days": {"2026-08-22": 10, ...}} minutes.
-STATS_PATH = os.path.expanduser("~/.local/state/omarchy/zen/stats.json")
+STATS_PATH = os.path.expanduser("~/.local/state/omarchy/aven.terminal-breather/stats.json")
+# omarchy-zen's stats file: the one-time seed for STATS_PATH, read only (see seed_stats).
+ZEN_STATS_PATH = os.path.expanduser("~/.local/state/omarchy/zen/stats.json")
 MEDITATION_LOG_HEADER = (
     "# Meditation Log\n"
     "\n"
@@ -231,15 +240,21 @@ DAY_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 MINUTES_RE = re.compile(r"[1-9][0-9]{0,5}")
 
 
-def add_stats_minutes(path, day_key, minutes):
+def add_stats_minutes(path, day_key, minutes, seed_path=None):
     """Adds minutes to one day of the stats file at path, safely against other writers.
 
     The read, merge and write run under an exclusive flock on path + ".lock". The
     lock sits on a sibling file because the stats file is replaced by rename, which
     would orphan a lock held on it. The merge re-reads the file on disk, so minutes
-    that another session or omarchy-zen wrote since this process started are kept.
-    The new contents go to a temp file that is fsynced and renamed over path, so an
-    interrupted write leaves the previous file intact.
+    that another session or the terminal guide wrote since this process started are
+    kept. The new contents go to a temp file that is fsynced and renamed over path, so
+    an interrupted write leaves the previous file intact.
+
+    seed_path, when given, is omarchy-zen's stats file. On the first run, before the
+    one-time copy is marked done (see seed_stats), a missing path starts from a copy
+    of its history, so a first session that runs before any seeding still carries the
+    old totals over. The write then marks the copy done, so seed_path is never read
+    again, even if path is later deleted.
 
     Raises OSError when the file cannot be read or replaced; path is then unchanged.
     Creates missing parent directories and keeps the file's permission bits.
@@ -247,59 +262,125 @@ def add_stats_minutes(path, day_key, minutes):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path + ".lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        stats, mode = _read_stats_locked(path)
+        first_run = seed_path is not None and not os.path.lexists(path + SEEDED_SUFFIX)
+        stats, mode = _read_stats_locked(path, seed_path if first_run else None)
         stats = add_minutes(stats, day_key, minutes)
-        _replace_file(path, json.dumps(stats, separators=(",", ":")), mode)
+        _replace_file(path, json.dumps(stats, separators=(",", ":")).encode("utf-8"), mode)
+        if first_run:
+            _mark_seeded(path)
 
 
-# A file that does not parse is re-read this many times, STATS_REREAD_DELAY
-# seconds apart, before it is treated as corrupt. omarchy-zen writes stats.json in
-# place (truncate, then write) without the lock, so a read can land between the two;
-# its write is a few hundred bytes and finishes long before the next try.
-STATS_REREADS = 5
-STATS_REREAD_DELAY = 0.05
+# Beside the stats file, an empty marker that the one-time copy from omarchy-zen's
+# file is done. It outlives the stats file, so deleting Breather's stats.json resets
+# its history to empty rather than re-importing Zen's.
+SEEDED_SUFFIX = ".seeded"
 
 
-def _read_stats_locked(path):
-    """Reads the stats file for a locked merge and returns (stats, mode).
+def seed_stats(path, seed_path):
+    """First run: creates the stats file at path from a copy of seed_path, once.
 
-    A missing file gives empty stats and the default mode 0644. Empty or unparseable
-    text is re-read a few times first (see STATS_REREADS), so an unlocked omarchy-zen
-    write caught half-way is read once it lands rather than treated as no history.
-    A file still empty after that holds no history and gives empty stats. A file still
-    not a stats file (a truncated write from an older, non-atomic writer, say) is
-    renamed to path + ".corrupt-<time>" rather than overwritten, so its history can
-    still be recovered by hand. Other read errors propagate, so nothing is written over
-    a file that was not read.
+    seed_path is omarchy-zen's stats file. It is opened read-only, never locked,
+    renamed or written, so its bytes and mtime stay as Zen left them. It is read only
+    while the copy is not yet marked done (path + SEEDED_SUFFIX) and path does not
+    exist; either way the call ends with the marker in place, so afterwards seed_path
+    is never read and Breather's history is its own. A seed that is a stats file is
+    copied byte for byte with its permission bits; a missing, empty or unparseable
+    seed gives an empty history, so the first run still ends with path in place.
+
+    Runs under the same lock as add_stats_minutes, so it cannot race a session's
+    write. Returns True when it created path, False otherwise.
+    Raises OSError when the seed cannot be read or path cannot be written.
     """
-    for attempt in range(STATS_REREADS + 1):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path + ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.lexists(path + SEEDED_SUFFIX):
+            return False
+        created = not os.path.lexists(path)
+        if created:
+            raw, mode = _read_seed(seed_path)
+            _replace_file(path, raw if raw is not None else b'{"days":{}}', mode)
+        _mark_seeded(path)
+        return created
+
+
+def _mark_seeded(path):
+    """Creates the empty SEEDED_SUFFIX marker beside path. Called under path's lock,
+    after path is written: a crash in between leaves path in place, which alone keeps
+    the seed from being read again."""
+    open(path + SEEDED_SUFFIX, "a").close()
+
+
+# A seed that does not parse is re-read this many times, SEED_REREAD_DELAY seconds
+# apart, before it is treated as holding no history. omarchy-zen writes its
+# stats.json in place (truncate, then write) without a lock, so a read can land
+# between the two; its write is a few hundred bytes and finishes long before the
+# next try.
+SEED_REREADS = 5
+SEED_REREAD_DELAY = 0.05
+
+
+def _read_seed(seed_path):
+    """Reads omarchy-zen's stats file for seeding; returns (raw, mode).
+
+    raw is the file's bytes when they are a stats file, else None (missing, empty,
+    or still unparseable after SEED_REREADS re-reads); mode is its permission bits,
+    or 0644 when raw is None. Read-only: the seed is never repaired or set aside,
+    since it belongs to Zen. Read errors other than a missing file propagate.
+    """
+    for attempt in range(SEED_REREADS + 1):
         try:
-            mode = stat.S_IMODE(os.stat(path).st_mode)
-            with open(path, "rb") as f:
+            mode = stat.S_IMODE(os.stat(seed_path).st_mode)
+            with open(seed_path, "rb") as f:
                 raw = f.read()
         except FileNotFoundError:
+            return None, 0o644
+        if raw.strip() and parse_stats_strict(raw) is not None:
+            return raw, mode
+        if attempt < SEED_REREADS:
+            time.sleep(SEED_REREAD_DELAY)
+    return None, 0o644
+
+
+def _read_stats_locked(path, seed_path=None):
+    """Reads the stats file for a locked merge and returns (stats, mode).
+
+    A missing file gives the seed's history and permission bits when seed_path is
+    given (see seed_stats), else empty stats and mode 0644. An empty file holds
+    no history and gives empty stats. A file that is not a stats file (edited by
+    hand, say) is renamed to path + ".corrupt-<time>" rather than overwritten, so its
+    history can still be recovered by hand. No re-read is needed: every writer of
+    path replaces it atomically. Other read errors propagate, so nothing is written
+    over a file that was not read.
+    """
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        with open(path, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        if seed_path is None:
             return {"days": {}}, 0o644
-        stats = parse_stats_strict(raw) if raw.strip() else None
-        if stats is not None:
-            return stats, mode
-        if attempt < STATS_REREADS:
-            time.sleep(STATS_REREAD_DELAY)
+        raw, mode = _read_seed(seed_path)
+        return (parse_stats_strict(raw) if raw is not None else {"days": {}}), mode
     if not raw.strip():
         return {"days": {}}, mode
+    stats = parse_stats_strict(raw)
+    if stats is not None:
+        return stats, mode
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     os.replace(path, "%s.corrupt-%s" % (path, stamp))
     return {"days": {}}, mode
 
 
-def _replace_file(path, text, mode):
-    """Writes text to a temp file beside path, fsyncs it, and renames it over path,
-    so a reader sees either the old file or the new one, never a partial write.
+def _replace_file(path, data, mode):
+    """Writes data (bytes) to a temp file beside path, fsyncs it, and renames it over
+    path, so a reader sees either the old file or the new one, never a partial write.
     The temp file is removed on any failure before the rename."""
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(dir=directory, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
@@ -345,8 +426,9 @@ def log_session(pattern_name, elapsed_secs, total_secs, completed):
 
     minutes is floor(elapsed / 60) when ended early, or max(1,
     round(total / 60)) when completed. Nothing is logged under one
-    minute. The minutes are merged into the stats file under its lock
-    (see add_stats_minutes). The meditation log is written unless
+    minute. The minutes are merged into Breather's stats file under its
+    lock, seeded from omarchy-zen's file on the first run (see
+    add_stats_minutes). The meditation log is written unless
     meditationLogEnabled is false: it is created with the header when
     missing, and the row is skipped silently when its folder is gone (no
     mkdir — the row never lands somewhere the vault is not). Returns the
@@ -362,7 +444,7 @@ def log_session(pattern_name, elapsed_secs, total_secs, completed):
     today = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        add_stats_minutes(STATS_PATH, today, minutes)
+        add_stats_minutes(STATS_PATH, today, minutes, ZEN_STATS_PATH)
     except OSError:
         pass
 
@@ -597,21 +679,42 @@ def parse_minutes(raw):
 
 
 def record_stats(args):
-    """Entry point of `tb-guide --record-stats PATH DAY MINUTES`, the stats-only
-    write the bar makes after a session. PATH must be absolute, DAY is YYYY-MM-DD
-    and MINUTES is 1 to 999999; nothing is written for bad arguments.
+    """Entry point of `tb-guide --record-stats PATH DAY MINUTES [SEED]`, the
+    stats-only write the overlay makes after a session. PATH must be absolute, DAY
+    is YYYY-MM-DD and MINUTES is 1 to 999999; SEED, when given, is the absolute path
+    of omarchy-zen's stats file to copy history from if PATH does not exist yet (see
+    add_stats_minutes). Nothing is written for bad arguments.
 
     Returns 0 on success, 2 for bad arguments, and 1 when the file cannot be
     written (the error goes to stderr).
     """
-    if (len(args) != 3 or not os.path.isabs(args[0]) or not DAY_RE.fullmatch(args[1])
-            or not MINUTES_RE.fullmatch(args[2])):
-        sys.stderr.write("usage: tb-guide --record-stats PATH YYYY-MM-DD MINUTES\n")
+    if (len(args) not in (3, 4) or not all(os.path.isabs(p) for p in args[:1] + args[3:])
+            or not DAY_RE.fullmatch(args[1]) or not MINUTES_RE.fullmatch(args[2])):
+        sys.stderr.write("usage: tb-guide --record-stats PATH YYYY-MM-DD MINUTES [SEED]\n")
         return 2
     try:
-        add_stats_minutes(args[0], args[1], int(args[2]))
+        add_stats_minutes(args[0], args[1], int(args[2]), args[3] if len(args) == 4 else None)
     except OSError as e:
         sys.stderr.write("tb-guide: could not record stats: %s\n" % e)
+        return 1
+    return 0
+
+
+def seed_stats_cli(args):
+    """Entry point of `tb-guide --seed-stats PATH SEED`, the first-run copy the bar
+    and overlay run when they load: creates PATH from SEED, omarchy-zen's stats file,
+    unless PATH exists (see seed_stats). Both paths must be absolute.
+
+    Returns 0 whether or not a copy was made, 2 for bad arguments, and 1 when the
+    seed cannot be read or PATH cannot be written (the error goes to stderr).
+    """
+    if len(args) != 2 or not all(os.path.isabs(p) for p in args):
+        sys.stderr.write("usage: tb-guide --seed-stats PATH SEED\n")
+        return 2
+    try:
+        seed_stats(args[0], args[1])
+    except OSError as e:
+        sys.stderr.write("tb-guide: could not seed stats: %s\n" % e)
         return 1
     return 0
 
@@ -619,6 +722,8 @@ def record_stats(args):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--record-stats":
         return record_stats(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "--seed-stats":
+        return seed_stats_cli(sys.argv[2:])
     pattern_key = sys.argv[1] if len(sys.argv) > 1 else "box"
     minutes = parse_minutes(sys.argv[2] if len(sys.argv) > 2 else None)
 
