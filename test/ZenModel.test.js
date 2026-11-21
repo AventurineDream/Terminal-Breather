@@ -12,7 +12,7 @@ const src = fs
   .replace(/^\.pragma library\n/, "");
 const factory = new Function(
   src +
-    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, patternOptions, minuteOptions, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, normalizeLogPath, logRow, appendLogCommand, flagSetting, barEntrySettings, sessionSettings, dndQueryCommand, dndEngageCommand, dndRestoreCommand, dndState, dndInitial, dndStep, DND_MARKER_BODY, persistStatsCommand, localPathOf };"
+    "\nreturn { PATTERNS, PATTERN_ORDER, pattern, cycleSeconds, breathAt, rampScale, rampBaseTime, parseCustomPatterns, resolvePatterns, patternOptions, minuteOptions, parseStats, addMinutes, streakDays, weekSeries, formatRemaining, MEDITATION_LOG_HEADER, meditationLogPath, normalizeLogPath, logRow, appendLogCommand, flagSetting, barEntrySettings, sessionSettings, dndQueryCommand, dndEngageCommand, dndRestoreCommand, dndState, dndInitial, dndStep, DND_MARKER_BODY, persistStatsCommand, seedStatsCommand, localPathOf };"
 );
 const M = factory();
 
@@ -434,24 +434,37 @@ check("sessionSettings: null and undefined payload log paths are absent, so the 
   M.sessionSettings({ logPath: null }, saved, TEST_HOME).logPath === "/tmp/m.md" &&
   M.sessionSettings({ logPath: undefined }, saved, TEST_HOME).logPath === "/tmp/m.md");
 
-// Shared stats: the bar hands this session's minutes to the terminal guide's
-// --record-stats mode, which merges them into the file on disk. The real helper runs
-// against a temp stats file, so the merge and the byte format are checked together.
+// Stats: the overlay hands this session's minutes to the terminal guide's
+// --record-stats mode, which merges them into Breather's own file on disk, and the bar
+// and overlay run --seed-stats on load to copy omarchy-zen's history the first time.
+// The real helper runs against temp files, so argv, merge, seeding and the byte
+// format are checked together.
 const shareRoot = fs.mkdtempSync(path.join(os.tmpdir(), "zen-share-"));
-const shareStats = path.join(shareRoot, "stats.json");
+const shareStats = path.join(shareRoot, "breather", "stats.json");
+const zenStats = path.join(shareRoot, "zen", "stats.json");
 const guideFile = path.join(__dirname, "..", "cli", "tb-guide");
-const persist = M.persistStatsCommand(guideFile, shareStats, "2026-11-11", 5);
-check("persistStatsCommand: argv runs the guide's --record-stats mode",
-  JSON.stringify(persist) ===
-    JSON.stringify(["python3", guideFile, "--record-stats", shareStats, "2026-11-11", "5"]));
-fs.writeFileSync(shareStats, '{"days":{"2026-11-10":3}}');
-const persistRun = spawnSync(persist[0], persist.slice(1), {
+const runArgv = (argv) => spawnSync(argv[0], argv.slice(1), {
   encoding: "utf8",
   env: { ...process.env, HOME: shareRoot },
 });
-check("persistStatsCommand: merges into the file on disk, in the Zen byte format",
-  persistRun.status === 0 &&
+const persist = M.persistStatsCommand(guideFile, shareStats, "2026-11-11", 5, zenStats);
+check("persistStatsCommand: argv runs the guide's --record-stats mode with the Zen seed",
+  JSON.stringify(persist) ===
+    JSON.stringify(["python3", guideFile, "--record-stats", shareStats, "2026-11-11", "5", zenStats]));
+const seed = M.seedStatsCommand(guideFile, shareStats, zenStats);
+check("seedStatsCommand: argv runs the guide's --seed-stats mode",
+  JSON.stringify(seed) === JSON.stringify(["python3", guideFile, "--seed-stats", shareStats, zenStats]));
+fs.mkdirSync(path.dirname(zenStats));
+fs.writeFileSync(zenStats, '{"days":{"2026-11-10":3}}');
+const zenMtime = fs.statSync(zenStats).mtimeMs;
+check("seedStatsCommand: the first run copies Zen's history into Breather's file",
+  runArgv(seed).status === 0 && fs.readFileSync(shareStats, "utf8") === '{"days":{"2026-11-10":3}}');
+check("persistStatsCommand: merges into Breather's file on disk, in the Zen byte format",
+  runArgv(persist).status === 0 &&
   fs.readFileSync(shareStats, "utf8") === '{"days":{"2026-11-10":3,"2026-11-11":5}}');
+check("seed and persist leave Zen's file byte-identical, mtime included",
+  fs.readFileSync(zenStats, "utf8") === '{"days":{"2026-11-10":3}}' &&
+  fs.statSync(zenStats).mtimeMs === zenMtime);
 fs.rmSync(shareRoot, { recursive: true, force: true });
 check("localPathOf: decodes a file URL to a local path",
   M.localPathOf("file:///home/a%20b/cli/tb-guide") === "/home/a b/cli/tb-guide");

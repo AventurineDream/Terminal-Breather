@@ -475,10 +475,12 @@ function dndStep(st, event, live, wanted, arg) {
   return { state: s, effects: fx }
 }
 
-// ---- Shared stats file. omarchy-zen writes the same file, and so may another
-// session or the terminal guide, so no writer sends a whole snapshot that could
-// be stale. The bar sends only this session's minutes; `tb-guide --record-stats`
-// re-reads the file under a lock, adds them, and replaces the file atomically.
+// ---- Stats file. Breather keeps its own stats.json, apart from omarchy-zen's;
+// the overlay, the bar and the terminal guide all write it, so no writer sends a
+// whole snapshot that could be stale. The overlay sends only this session's
+// minutes; `tb-guide --record-stats` re-reads the file under a lock, adds them, and
+// replaces the file atomically. On the first run the file is created from a copy of
+// Zen's stats.json (`tb-guide --seed-stats`), which is only read, and only that once.
 // The format is the compact {"days":{...}} that JSON.stringify writes.
 
 /**
@@ -493,15 +495,28 @@ function localPathOf(url) {
 }
 
 /**
- * Builds argv that adds one session's minutes to the shared stats file.
+ * Builds argv that adds one session's minutes to Breather's stats file.
  * @param {string} guidePath Absolute path of cli/tb-guide.
- * @param {string} statsPath Absolute path of stats.json.
+ * @param {string} statsPath Absolute path of Breather's stats.json.
  * @param {string} dayKey Local date, YYYY-MM-DD.
  * @param {number} minutes Whole minutes (at least 1) to add to that day.
+ * @param {string} seedPath Absolute path of omarchy-zen's stats.json, copied as the
+ *   starting history if statsPath does not exist yet; never written.
  * @returns {string[]} argv; the helper merges with the file on disk, so minutes from other writers are kept.
  */
-function persistStatsCommand(guidePath, statsPath, dayKey, minutes) {
-  return ["python3", guidePath, "--record-stats", statsPath, dayKey, String(minutes)]
+function persistStatsCommand(guidePath, statsPath, dayKey, minutes, seedPath) {
+  return ["python3", guidePath, "--record-stats", statsPath, dayKey, String(minutes), seedPath]
+}
+
+/**
+ * Builds argv for the first-run copy of omarchy-zen's history into Breather's stats file.
+ * @param {string} guidePath Absolute path of cli/tb-guide.
+ * @param {string} statsPath Absolute path of Breather's stats.json.
+ * @param {string} seedPath Absolute path of omarchy-zen's stats.json; only read.
+ * @returns {string[]} argv; a no-op once statsPath exists, so it is safe to run on every load.
+ */
+function seedStatsCommand(guidePath, statsPath, seedPath) {
+  return ["python3", guidePath, "--seed-stats", statsPath, seedPath]
 }
 
 // ---- Obsidian meditation log. One row per session, appended to a Markdown

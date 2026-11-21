@@ -4,8 +4,9 @@
 Loads the guide's pure helpers (pattern resolution, custom-pattern
 loading, the circle renderer, the clock formatter, and the session
 logging that mirrors BreatheOverlay.endSession) without starting a
-session. The shared stats file is also exercised end to end through the
-`--record-stats` CLI, against temp HOME directories. No shell needed.
+session. The stats file, including the first-run seed from omarchy-zen's
+file, is also exercised end to end through the `--record-stats` and
+`--seed-stats` CLIs, against temp HOME directories. No shell needed.
 """
 
 import json
@@ -44,6 +45,22 @@ parse_stats_strict = _ns["parse_stats_strict"]
 add_stats_minutes = _ns["add_stats_minutes"]
 flag_setting = _ns["flag_setting"]
 resolve_log_path = _ns["resolve_log_path"]
+seed_stats = _ns["seed_stats"]
+
+
+def use_home(home):
+    """Points HOME and the guide's stats constants at a temp home, so no test
+    reads or writes the real Breather or Zen stats files."""
+    os.environ["HOME"] = home
+    state = os.path.join(home, ".local", "state", "omarchy")
+    _ns["STATS_PATH"] = os.path.join(state, "aven.terminal-breather", "stats.json")
+    _ns["ZEN_STATS_PATH"] = os.path.join(state, "zen", "stats.json")
+    return _ns["STATS_PATH"], _ns["ZEN_STATS_PATH"]
+
+
+# Nothing below may touch the real files, even a test that forgets use_home.
+_scratch_home = tempfile.TemporaryDirectory()
+use_home(_scratch_home.name)
 
 pass_count = 0
 
@@ -183,12 +200,9 @@ check("log_row: minutes are floored",
       "| 2026-11-13 | Box breathing | 5 | yes |")
 
 # --- log_session: end-to-end, against a temp HOME ---
-# (STATS_PATH is a module constant, so point it at the temp dir too.)
+# (STATS_PATH and ZEN_STATS_PATH are module constants; use_home points them here.)
 with tempfile.TemporaryDirectory() as tmp:
-    os.environ["HOME"] = tmp
-    stats_dir = os.path.join(tmp, ".local", "state", "omarchy", "zen")
-    stats_path = os.path.join(stats_dir, "stats.json")
-    _ns["STATS_PATH"] = stats_path
+    stats_path, _ = use_home(tmp)
     # The vault-default log folder exists in this temp HOME, so the row
     # lands; a second case below removes it to check the skip.
     log_dir = os.path.join(tmp, "Projects", "Obsidian", "Aventurine",
@@ -225,7 +239,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # Under a minute: nothing is logged, no file is created.
     with tempfile.TemporaryDirectory() as tmp2:
-        os.environ["HOME"] = tmp2
+        use_home(tmp2)
         _ns["STATS_PATH"] = os.path.join(tmp2, "stats.json")
         check("log_session: 45s logs nothing",
               log_session("Box breathing", 45, 300, False) == 0)
@@ -234,7 +248,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # Missing log folder: stats still land, the row is skipped silently.
     with tempfile.TemporaryDirectory() as tmp3:
-        os.environ["HOME"] = tmp3
+        use_home(tmp3)
         _ns["STATS_PATH"] = os.path.join(tmp3, "stats.json")
         check("log_session: missing folder still returns the minutes",
               log_session("Box breathing", 120, 300, False) == 2)
@@ -362,7 +376,7 @@ check("minutes: non-numeric text falls back to the default 5",
 check("minutes: a decimal is invalid and falls back to the default 5",
       parse_minutes("2.5") == 5)
 
-# --- shared stats file: locked merge, atomic replace, --record-stats ---
+# --- Breather's stats file: locked merge, atomic replace, --record-stats ---
 def run_guide(args, home):
     """Runs tb-guide with args and a temp HOME; returns the CompletedProcess."""
     return subprocess.run([sys.executable, GUIDE_PATH] + args,
@@ -387,7 +401,7 @@ def add_with_failure(path, which):
 
 
 with tempfile.TemporaryDirectory() as tmp:
-    stats_dir = os.path.join(tmp, "zen")
+    stats_dir = os.path.join(tmp, "breather")
     stats_path = os.path.join(stats_dir, "stats.json")
     os.makedirs(stats_dir)
     with open(stats_path, "w") as f:
@@ -449,29 +463,197 @@ with tempfile.TemporaryDirectory() as tmp:
     with open(stats_path) as f:
         check("an empty stats file gets the new minutes", f.read() == '{"days":{"2026-11-11":2}}')
 
-# An unlocked omarchy-zen write caught half-way (truncated, then written in place)
-# is re-read once it lands: its history is merged, not set aside.
+# --- first run: Breather's file is seeded once from omarchy-zen's, read-only ---
+ZEN_HISTORY = '{"days":{"2026-11-09":4,"2026-11-10":7}}'
+
+
+def write_zen(zen_path, text, mtime_ns=1_700_000_000_000_000_000):
+    """Writes Zen's stats file with a fixed, old mtime, so a write would show."""
+    os.makedirs(os.path.dirname(zen_path), exist_ok=True)
+    with open(zen_path, "w") as f:
+        f.write(text)
+    os.utime(zen_path, ns=(mtime_ns, mtime_ns))
+    return os.stat(zen_path).st_mtime_ns
+
+
+def zen_untouched(zen_path, text, mtime_ns):
+    """True when Zen's file still holds text with mtime_ns, and nothing was added beside it."""
+    with open(zen_path) as f:
+        same = f.read() == text
+    return (same and os.stat(zen_path).st_mtime_ns == mtime_ns
+            and os.listdir(os.path.dirname(zen_path)) == ["stats.json"])
+
+
+# Seeding copies Zen's file byte for byte, with its mode, into Breather's own path.
 with tempfile.TemporaryDirectory() as tmp:
-    stats_path = os.path.join(tmp, "stats.json")
+    stats_path, zen_path = use_home(tmp)
+    zen_mtime = write_zen(zen_path, ZEN_HISTORY)
+    os.chmod(zen_path, 0o600)
+    check("seed: the first run creates Breather's file", seed_stats(stats_path, zen_path) is True)
+    with open(stats_path) as f:
+        check("seed: Breather's file is a byte copy of Zen's", f.read() == ZEN_HISTORY)
+    check("seed: the copy keeps Zen's permission bits",
+          stat.S_IMODE(os.stat(stats_path).st_mode) == 0o600)
+    check("seed: Zen's file is byte-identical, mtime included, and gets no lock beside it",
+          zen_untouched(zen_path, ZEN_HISTORY, zen_mtime))
+
+    # Later runs: sessions land in Breather's file only, and Zen's file is not even
+    # read again: it is made unreadable, so any read would fail the write.
+    os.chmod(zen_path, 0o000)
+    check("seed: a second seed is a no-op", seed_stats(stats_path, zen_path) is False)
+    check("seed: a later session logs its minutes", log_session("Box breathing", 300, 300, True) == 5)
+    r = run_guide(["--record-stats", stats_path, "2026-01-01", "2", zen_path], tmp)
+    check("seed: a later --record-stats with the seed argument exits 0", r.returncode == 0)
+    os.chmod(zen_path, 0o600)
+    check("later runs: Zen's file stays byte-identical, mtime included",
+          zen_untouched(zen_path, ZEN_HISTORY, zen_mtime))
+    with open(stats_path) as f:
+        later = json.loads(f.read())["days"]
+    check("later runs: Breather's history is Zen's copy plus its own minutes",
+          later["2026-11-09"] == 4 and later["2026-01-01"] == 2 and sum(later.values()) == 18)
+    # Minutes Zen records after the first run no longer reach Breather.
+    zen_mtime = write_zen(zen_path, '{"days":{"2026-11-09":4,"2026-11-10":7,"2026-01-02":30}}')
+    check("later runs: a re-seed does not pick up Zen's new minutes",
+          seed_stats(stats_path, zen_path) is False)
+    add_stats_minutes(stats_path, "2026-01-02", 1, zen_path)
+    with open(stats_path) as f:
+        check("later runs: Zen's new minutes are not merged into Breather's file",
+              json.loads(f.read())["days"]["2026-01-02"] == 1)
+    # Deleting Breather's file resets its history; Zen's is not imported again.
+    os.remove(stats_path)
+    check("reset: a seed after deleting Breather's file does not re-import Zen's",
+          seed_stats(stats_path, zen_path) is False and not os.path.exists(stats_path))
+    add_stats_minutes(stats_path, "2026-01-03", 3, zen_path)
+    with open(stats_path) as f:
+        check("reset: the next session starts an empty history", f.read() == '{"days":{"2026-01-03":3}}')
+    check("reset: Zen's file stays byte-identical, mtime included",
+          zen_untouched(zen_path, '{"days":{"2026-11-09":4,"2026-11-10":7,"2026-01-02":30}}', zen_mtime))
+
+# A Breather file from before the copy was marked (a crash in between) is kept, and
+# Zen's file is not read: it is unreadable here, so a read would fail.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path, zen_path = use_home(tmp)
+    write_zen(zen_path, ZEN_HISTORY)
+    os.chmod(zen_path, 0o000)
+    os.makedirs(os.path.dirname(stats_path))
     with open(stats_path, "w") as f:
-        f.write('{"days":{"2026-11-10":')
+        f.write('{"days":{"2026-01-04":2}}')
+    check("unmarked: an existing Breather file is not replaced by a seed",
+          seed_stats(stats_path, zen_path) is False and os.path.exists(stats_path + ".seeded"))
+    os.chmod(zen_path, 0o600)
+    with open(stats_path) as f:
+        check("unmarked: Breather's own history is kept", f.read() == '{"days":{"2026-01-04":2}}')
+
+# A first session with no seed run before it still carries Zen's history over.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path, zen_path = use_home(tmp)
+    zen_mtime = write_zen(zen_path, ZEN_HISTORY)
+    check("first session: tb-guide logs its minutes", log_session("Box breathing", 120, 300, False) == 2)
+    with open(stats_path) as f:
+        days = json.loads(f.read())["days"]
+    check("first session: Breather's file holds Zen's history plus the session",
+          days["2026-11-09"] == 4 and days["2026-11-10"] == 7 and sum(days.values()) == 13)
+    check("first session: Zen's file stays byte-identical, mtime included",
+          zen_untouched(zen_path, ZEN_HISTORY, zen_mtime))
+
+# No Zen file, or an empty one: the first run starts an empty history.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path, zen_path = use_home(tmp)
+    check("seed: with no Zen file, Breather's file starts empty", seed_stats(stats_path, zen_path) is True)
+    with open(stats_path) as f:
+        check("seed: the empty history is a stats file", f.read() == '{"days":{}}')
+    check("seed: no Zen file or folder is created", not os.path.exists(os.path.dirname(zen_path)))
+
+# A Zen file that is not a stats file is left exactly as it is; Breather starts empty.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path, zen_path = use_home(tmp)
+    _ns["SEED_REREAD_DELAY"] = 0.001
+    zen_mtime = write_zen(zen_path, '{"days":{"2026-11-10":')
+    seed_stats(stats_path, zen_path)
+    _ns["SEED_REREAD_DELAY"] = 0.05
+    with open(stats_path) as f:
+        check("seed: an unparseable Zen file gives an empty history", f.read() == '{"days":{}}')
+    check("seed: an unparseable Zen file is not set aside or repaired",
+          zen_untouched(zen_path, '{"days":{"2026-11-10":', zen_mtime))
+
+# An unlocked omarchy-zen write caught half-way (truncated, then written in place)
+# is re-read once it lands: its history is seeded, not dropped.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path, zen_path = use_home(tmp)
+    write_zen(zen_path, '{"days":{"2026-11-10":')
+    # A wide re-read window (5 x 0.2 s) so the 0.08 s write lands well inside it.
+    _ns["SEED_REREAD_DELAY"] = 0.2
 
     def finish_zen_write():
         time.sleep(0.08)
-        with open(stats_path, "r+") as f:
+        with open(zen_path, "r+") as f:
             f.seek(0)
             f.write('{"days":{"2026-11-10":7}}')
             f.truncate()
 
     writer = threading.Thread(target=finish_zen_write)
     writer.start()
-    add_stats_minutes(stats_path, "2026-11-11", 2)
+    seed_stats(stats_path, zen_path)
     writer.join()
+    _ns["SEED_REREAD_DELAY"] = 0.05
     with open(stats_path) as f:
-        check("a half-written stats file is re-read and merged once it lands",
-              json.loads(f.read()) == {"days": {"2026-11-10": 7, "2026-11-11": 2}})
-    check("a half-written stats file that lands is not set aside as corrupt",
-          not [n for n in os.listdir(tmp) if ".corrupt-" in n])
+        check("seed: a half-written Zen file is re-read and copied once it lands",
+              f.read() == '{"days":{"2026-11-10":7}}')
+
+# The overlay (--record-stats, as ZenModel.persistStatsCommand builds it), tb-guide
+# sessions and the bar's --seed-stats all coordinate on Breather's default path.
+with tempfile.TemporaryDirectory() as tmp:
+    fresh = {}
+    saved_home = os.environ["HOME"]
+    os.environ["HOME"] = tmp
+    exec(_src.split('if __name__ == "__main__":')[0], fresh)
+    os.environ["HOME"] = saved_home
+    stats_path = os.path.join(tmp, ".local", "state", "omarchy", "aven.terminal-breather", "stats.json")
+    zen_path = os.path.join(tmp, ".local", "state", "omarchy", "zen", "stats.json")
+    check("default path: tb-guide writes Breather's own stats file",
+          fresh["STATS_PATH"] == stats_path and fresh["ZEN_STATS_PATH"] == zen_path)
+    zen_mtime = write_zen(zen_path, ZEN_HISTORY)
+    today = time.strftime("%Y-%m-%d")
+    seeders = [subprocess.Popen([sys.executable, GUIDE_PATH, "--seed-stats", stats_path, zen_path],
+                                env=dict(os.environ, HOME=tmp)) for _ in range(4)]
+    overlay = [subprocess.Popen([sys.executable, GUIDE_PATH, "--record-stats",
+                                 stats_path, today, "1", zen_path], env=dict(os.environ, HOME=tmp))
+               for _ in range(12)]
+    guides = [threading.Thread(target=fresh["log_session"], args=("Box breathing", 60, 300, False))
+              for _ in range(12)]
+    os.environ["HOME"] = tmp
+    for t in guides:
+        t.start()
+    for t in guides:
+        t.join()
+    os.environ["HOME"] = saved_home
+    for p in seeders + overlay:
+        p.wait()
+    check("coordination: every seed and overlay write exits 0",
+          all(p.returncode == 0 for p in seeders + overlay))
+    with open(stats_path) as f:
+        days = json.loads(f.read())["days"]
+    check("coordination: no minute is lost and Zen's history is carried over exactly once",
+          days.get(today, 0) - json.loads(ZEN_HISTORY)["days"].get(today, 0) == 24 and
+          days["2026-11-09"] == 4)
+    check("coordination: Zen's file stays byte-identical, mtime included",
+          zen_untouched(zen_path, ZEN_HISTORY, zen_mtime))
+
+# --seed-stats validates its paths and reports a write it cannot make.
+with tempfile.TemporaryDirectory() as tmp:
+    target = os.path.join(tmp, "stats.json")
+    for args in ([target], ["relative/stats.json", "/tmp/zen.json"], [target, "zen.json"],
+                 [target, "/tmp/zen.json", "extra"]):
+        r = run_guide(["--seed-stats"] + args, tmp)
+        check("seed-stats rejects %r with exit 2" % (args,), r.returncode == 2 and not os.path.exists(target))
+    r = run_guide(["--record-stats", target, "2026-11-11", "5", "zen.json"], tmp)
+    check("record-stats rejects a relative seed path with exit 2",
+          r.returncode == 2 and not os.path.exists(target))
+    blocker = os.path.join(tmp, "afile")
+    open(blocker, "w").close()
+    r = run_guide(["--seed-stats", os.path.join(blocker, "stats.json"), os.path.join(tmp, "zen.json")], tmp)
+    check("seed-stats exits 1 and reports when the file cannot be written",
+          r.returncode == 1 and "could not seed stats" in r.stderr)
 
 # The writer keeps the file's mode, and creates a new file (and its folders) at 0644.
 with tempfile.TemporaryDirectory() as tmp:

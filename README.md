@@ -110,7 +110,9 @@ omarchy bar set aven.terminal-breather meditationLogPath "$HOME/notes/meditation
 omarchy bar set aven.terminal-breather meditationLogEnabled false
 ```
 
-Practice minutes and streaks are stored in `stats.json` under Omarchy's local plugin state (`~/.local/state/omarchy/zen/`). That is the same file omarchy-zen uses, so both plugins share one history. Each write re-reads the file under a lock, adds the new minutes, and replaces the file atomically, so concurrent sessions and `tb-guide` do not lose each other's entries. omarchy-zen writes its file without that lock, so its own writes can still overwrite a concurrent update.
+Practice minutes and streaks are stored in Breather's own `stats.json` under Omarchy's local plugin state (`~/.local/state/omarchy/aven.terminal-breather/`). Each write re-reads the file under a lock, adds the new minutes, and replaces the file atomically, so concurrent sessions and `tb-guide` do not lose each other's entries.
+
+Zen and Breather minutes no longer share a streak: omarchy-zen keeps its own `~/.local/state/omarchy/zen/stats.json`, and Breather never writes it. On the first run, when Breather's file does not exist yet, it is seeded from a copy of Zen's file, so existing totals and the current streak carry over once. After that, Zen's file is never read again; minutes practiced in Zen afterwards do not count toward Breather's streak, and the reverse. A `stats.json.seeded` marker beside Breather's file records the copy, so deleting Breather's `stats.json` starts an empty history rather than importing Zen's again.
 
 The optional meditation log appends a row for sessions of at least one minute, including sessions ended early. Set `meditationLogEnabled` to `false` to turn it off; minutes and streaks are still counted. With `meditationLogPath` empty, the log is `~/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md`; set it to any absolute path to use another note. The log does not create a missing parent folder: if the folder is absent, the row is skipped silently.
 
@@ -122,10 +124,11 @@ The optional meditation log appends a row for sessions of at least one minute, i
 
 ### Unreleased
 
-- Plugin id renamed `luotao.zen` → `aven.terminal-breather` (the upstream already holds `luotao.zen` in the marketplace). Existing installs must remove the plugin and re-add it under the new id; patterns and stats under `~/.config/omarchy/zen/` and `~/.local/state/omarchy/zen/` are unchanged.
+- Plugin id renamed `luotao.zen` → `aven.terminal-breather` (the upstream already holds `luotao.zen` in the marketplace). Existing installs must remove the plugin and re-add it under the new id; patterns under `~/.config/omarchy/zen/` are unchanged (for stats, see below).
 - The default meditation-log path follows the vault rename: `~/Projects/Obsidian/Home/…` → `~/Projects/Obsidian/Aventurine/…`.
 - Hardened session inputs: phase, ramp, and session durations are bounded, and custom-pattern validation matches the overlay. A Do Not Disturb restore now waits for the engage step, so DND can no longer be left on after a session.
-- Practice minutes are merged into the shared `stats.json` under a lock and written atomically: the bar hands its minutes to `tb-guide --record-stats`, so concurrent sessions, the terminal guide, and a crash mid-write no longer lose or truncate history. The file format is unchanged.
+- Practice minutes are merged into the stats file under a lock and written atomically: the overlay hands its minutes to `tb-guide --record-stats`, so concurrent sessions, the terminal guide, and a crash mid-write no longer lose or truncate history. The file format is unchanged.
+- Breather keeps its own history in `~/.local/state/omarchy/aven.terminal-breather/stats.json` and no longer writes omarchy-zen's `stats.json`, whose unlocked writes could overwrite Breather's minutes. Zen and Breather minutes no longer share a streak; the first run seeds Breather's file from a copy of Zen's, so existing totals carry over once.
 - Do Not Disturb is restored after an abrupt disable, removal, or crash. The engage step writes `~/.local/state/omarchy/zen/dnd-engaged.json` before turning DND on; the next load turns DND back off when that file is present.
 - New `meditationLogEnabled` setting (default on) turns off the Obsidian meditation log. Minutes and streaks are still counted. The Settings panel has an On/Off switch, and `tb-guide` honours the same key.
 - The saved bar settings are read from the `aven.terminal-breather` entry again. The overlay had still looked up the old `luotao.zen` id after the rename, so saved settings were ignored for summons that name only some keys.

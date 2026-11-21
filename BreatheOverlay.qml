@@ -30,11 +30,13 @@ Item {
   property var shell: null
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
-  readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
+  // Breather's own history. omarchy-zen's file is only the first-run seed (see statsSeed).
+  readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/aven.terminal-breather/stats.json"
+  readonly property string zenStatsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
   // Present while this plugin holds DND on for a session it started (see
   // ZenModel.dndEngageCommand). A leftover file means a run ended without restoring DND.
   readonly property string dndMarkerPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/dnd-engaged.json"
-  // The terminal guide's --record-stats mode writes the stats, so the bar and the
+  // The terminal guide's --record-stats mode writes the stats, so the overlay and the
   // SSH guide share one locked, atomic merge. Resolved from this plugin's directory.
   readonly property string guidePath: Model.localPathOf(Qt.resolvedUrl("cli/tb-guide"))
   readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
@@ -253,7 +255,7 @@ Item {
     if (minutes >= 1) {
       var today = Qt.formatDateTime(new Date(), "yyyy-MM-dd")
       root.stats = Model.addMinutes(root.stats, today, minutes)
-      Quickshell.execDetached(Model.persistStatsCommand(root.guidePath, root.statsPath, today, minutes))
+      Quickshell.execDetached(Model.persistStatsCommand(root.guidePath, root.statsPath, today, minutes, root.zenStatsPath))
       if (root.logWanted)
         Quickshell.execDetached(Model.appendLogCommand(root.logPath, Model.logRow(today, root.pattern.name, minutes, completed)))
     }
@@ -276,6 +278,16 @@ Item {
     }
     root.startedAt = 0
     root.dismiss()
+  }
+
+  // First run: copies omarchy-zen's history into Breather's own stats file, a no-op
+  // once that file exists. The reload afterwards picks up the copy, since a watch set
+  // while the file was missing never fires.
+  Process {
+    id: statsSeed
+    command: Model.seedStatsCommand(root.guidePath, root.statsPath, root.zenStatsPath)
+    running: true
+    onExited: statsFile.reload()
   }
 
   FileView {
