@@ -4,14 +4,19 @@
 Loads the guide's pure helpers (pattern resolution, custom-pattern
 loading, the circle renderer, the clock formatter, and the session
 logging that mirrors BreatheOverlay.endSession) without starting a
-session. No shell needed.
+session. The shared stats file is also exercised end to end through the
+`--record-stats` CLI, against temp HOME directories. No shell needed.
 """
 
 import json
 import os
 import re
+import stat
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GUIDE_PATH = os.path.join(HERE, "..", "cli", "tb-guide")
@@ -35,6 +40,10 @@ breath_at = _ns["breath_at"]
 ramp_base_time = _ns["ramp_base_time"]
 ramp_scale = _ns["ramp_scale"]
 parse_minutes = _ns["parse_minutes"]
+parse_stats_strict = _ns["parse_stats_strict"]
+add_stats_minutes = _ns["add_stats_minutes"]
+flag_setting = _ns["flag_setting"]
+resolve_log_path = _ns["resolve_log_path"]
 
 pass_count = 0
 
@@ -352,5 +361,213 @@ check("minutes: non-numeric text falls back to the default 5",
       parse_minutes("soon") == 5)
 check("minutes: a decimal is invalid and falls back to the default 5",
       parse_minutes("2.5") == 5)
+
+# --- shared stats file: locked merge, atomic replace, --record-stats ---
+def run_guide(args, home):
+    """Runs tb-guide with args and a temp HOME; returns the CompletedProcess."""
+    return subprocess.run([sys.executable, GUIDE_PATH] + args,
+                          env=dict(os.environ, HOME=home), capture_output=True, text=True)
+
+
+def _refuse(*args, **kwargs):
+    raise OSError("simulated failure")
+
+
+def add_with_failure(path, which):
+    """Runs add_stats_minutes with os.<which> refusing; returns True when it raised."""
+    real = getattr(os, which)
+    setattr(os, which, _refuse)
+    try:
+        add_stats_minutes(path, "2026-11-11", 4)
+        return False
+    except OSError:
+        return True
+    finally:
+        setattr(os, which, real)
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    stats_dir = os.path.join(tmp, "zen")
+    stats_path = os.path.join(stats_dir, "stats.json")
+    os.makedirs(stats_dir)
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":3}}')
+    # 24 writers at once, each adding one minute to the same day. A stale
+    # snapshot written by any of them would drop the others' minutes.
+    procs = [subprocess.Popen([sys.executable, GUIDE_PATH, "--record-stats",
+                               stats_path, "2026-11-11", "1"],
+                              env=dict(os.environ, HOME=tmp), stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True)
+             for _ in range(24)]
+    for p in procs:
+        p.communicate()
+    check("concurrent writers: every writer exits 0", all(p.returncode == 0 for p in procs))
+    with open(stats_path) as f:
+        check("concurrent writers: no minute is lost and the other day is kept",
+              f.read() == '{"days":{"2026-11-10":3,"2026-11-11":24}}')
+    check("concurrent writers: only the stats file and its lock remain",
+          sorted(os.listdir(stats_dir)) == ["stats.json", "stats.json.lock"])
+
+# A write that fails part-way leaves the previous file byte-identical and no temp file.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    original = '{"days":{"2026-11-10":3}}'
+    for which in ("fsync", "replace"):
+        with open(stats_path, "w") as f:
+            f.write(original)
+        check("interrupted write (%s) raises instead of reporting success" % which,
+              add_with_failure(stats_path, which))
+        with open(stats_path) as f:
+            check("interrupted write (%s) leaves the original byte-identical" % which,
+                  f.read() == original)
+        check("interrupted write (%s) leaves no temp file" % which,
+              sorted(os.listdir(tmp)) == ["stats.json", "stats.json.lock"])
+
+# A truncated file is set aside as a .corrupt copy, never overwritten in place.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    truncated = '{"days":{"2026-11-10":'
+    with open(stats_path, "w") as f:
+        f.write(truncated)
+    add_stats_minutes(stats_path, "2026-11-11", 2)
+    backups = [n for n in os.listdir(tmp) if n.startswith("stats.json.corrupt-")]
+    check("a truncated stats file is kept as a .corrupt copy", len(backups) == 1)
+    with open(os.path.join(tmp, backups[0])) as f:
+        check("the .corrupt copy keeps the original bytes", f.read() == truncated)
+    with open(stats_path) as f:
+        check("the fresh stats file holds the new minutes", f.read() == '{"days":{"2026-11-11":2}}')
+check("parse_stats: a JSON list is not a stats file",
+      parse_stats("[1]") == {"days": {}} and parse_stats_strict("[1]") is None)
+
+# An empty file holds no history: no .corrupt copy, just the new minutes.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    open(stats_path, "w").close()
+    add_stats_minutes(stats_path, "2026-11-11", 2)
+    check("an empty stats file is not set aside as corrupt",
+          not [n for n in os.listdir(tmp) if ".corrupt-" in n])
+    with open(stats_path) as f:
+        check("an empty stats file gets the new minutes", f.read() == '{"days":{"2026-11-11":2}}')
+
+# An unlocked omarchy-zen write caught half-way (truncated, then written in place)
+# is re-read once it lands: its history is merged, not set aside.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{"2026-11-10":')
+
+    def finish_zen_write():
+        time.sleep(0.08)
+        with open(stats_path, "r+") as f:
+            f.seek(0)
+            f.write('{"days":{"2026-11-10":7}}')
+            f.truncate()
+
+    writer = threading.Thread(target=finish_zen_write)
+    writer.start()
+    add_stats_minutes(stats_path, "2026-11-11", 2)
+    writer.join()
+    with open(stats_path) as f:
+        check("a half-written stats file is re-read and merged once it lands",
+              json.loads(f.read()) == {"days": {"2026-11-10": 7, "2026-11-11": 2}})
+    check("a half-written stats file that lands is not set aside as corrupt",
+          not [n for n in os.listdir(tmp) if ".corrupt-" in n])
+
+# The writer keeps the file's mode, and creates a new file (and its folders) at 0644.
+with tempfile.TemporaryDirectory() as tmp:
+    stats_path = os.path.join(tmp, "stats.json")
+    with open(stats_path, "w") as f:
+        f.write('{"days":{}}')
+    os.chmod(stats_path, 0o600)
+    add_stats_minutes(stats_path, "2026-11-11", 1)
+    check("an existing stats file keeps its permission bits",
+          stat.S_IMODE(os.stat(stats_path).st_mode) == 0o600)
+    fresh = os.path.join(tmp, "new", "zen", "stats.json")
+    add_stats_minutes(fresh, "2026-11-11", 1)
+    check("a new stats file is 0644 and its folders are created",
+          stat.S_IMODE(os.stat(fresh).st_mode) == 0o644)
+
+# --record-stats validates before writing; bad input exits 2 and creates nothing.
+with tempfile.TemporaryDirectory() as tmp:
+    target = os.path.join(tmp, "stats.json")
+    for args in (["relative/stats.json", "2026-11-11", "5"],
+                 [target, "11-11-2026", "5"],
+                 [target, "2026-11-11x", "5"],
+                 [target, "2026-11-11", "0"],
+                 [target, "2026-11-11", "-1"],
+                 [target, "2026-11-11", "1000000"],
+                 [target, "2026-11-11", "2.5"],
+                 [target, "2026-11-11"]):
+        r = run_guide(["--record-stats"] + args, tmp)
+        check("record-stats rejects %r with exit 2" % (args,),
+              r.returncode == 2 and not os.path.exists(target))
+    r = run_guide(["--record-stats", target, "2026-11-11", "999999"], tmp)
+    with open(target) as f:
+        check("record-stats accepts the largest minutes value",
+              r.returncode == 0 and f.read() == '{"days":{"2026-11-11":999999}}')
+    blocker = os.path.join(tmp, "afile")
+    open(blocker, "w").close()
+    r = run_guide(["--record-stats", os.path.join(blocker, "stats.json"), "2026-11-11", "5"], tmp)
+    check("record-stats exits 1 and reports when the file cannot be written",
+          r.returncode == 1 and "could not record stats" in r.stderr)
+
+
+def write_shell(home, value):
+    """Writes a shell.json whose aven.terminal-breather entry sets meditationLogEnabled."""
+    config = os.path.join(home, ".config", "omarchy")
+    os.makedirs(config, exist_ok=True)
+    with open(os.path.join(config, "shell.json"), "w") as f:
+        json.dump({"bar": [{"id": "aven.terminal-breather", "meditationLogEnabled": value}]}, f)
+
+
+# The Off setting: minutes keep counting, and no row (or log file) is written.
+with tempfile.TemporaryDirectory() as tmp:
+    os.environ["HOME"] = tmp
+    stats_path = os.path.join(tmp, ".local", "state", "omarchy", "zen", "stats.json")
+    _ns["STATS_PATH"] = stats_path
+    log_dir = os.path.join(tmp, "Projects", "Obsidian", "Aventurine",
+                           "20_Practices", "Meditation")
+    os.makedirs(log_dir)
+    log_path = os.path.join(log_dir, "Meditation Log.md")
+    write_shell(tmp, False)
+    check("log off: a session still returns its minutes",
+          log_session("Box breathing", 300, 300, True) == 5)
+    with open(stats_path) as f:
+        check("log off: the minutes still count in stats", list(json.load(f)["days"].values()) == [5])
+    check("log off: no meditation log is written", not os.path.exists(log_path))
+    write_shell(tmp, "false")
+    log_session("Box breathing", 60, 300, False)
+    check("log off as the string false also skips the log", not os.path.exists(log_path))
+    write_shell(tmp, True)
+    log_session("Box breathing", 60, 300, False)
+    with open(log_path) as f:
+        check("log back on: the row is appended", "| Box breathing | 1 | no |" in f.read())
+
+# meditationLogPath from shell.json is the log the guide writes to.
+with tempfile.TemporaryDirectory() as tmp:
+    os.environ["HOME"] = tmp
+    custom = os.path.join(tmp, "notes")
+    os.makedirs(custom)
+    write_shell(tmp, True)
+    with open(os.path.join(tmp, ".config", "omarchy", "shell.json"), "w") as f:
+        json.dump({"bar": [{"id": "aven.terminal-breather",
+                            "meditationLogPath": os.path.join(custom, "m.md")}]}, f)
+    check("resolve_log_path: the shell.json meditationLogPath is used",
+          resolve_log_path() == os.path.join(custom, "m.md"))
+with tempfile.TemporaryDirectory() as tmp:
+    os.environ["HOME"] = tmp
+    check("resolve_log_path: with no shell.json it is the vault default",
+          resolve_log_path() == default_log_path(tmp))
+
+check("flag_setting: booleans and their strings are explicit",
+      flag_setting(False, True) is False and flag_setting("false", True) is False and
+      flag_setting(True, False) is True and flag_setting("true", False) is True)
+check("flag_setting: absent or junk values take the fallback",
+      flag_setting(None, True) is True and flag_setting(0, True) is True and
+      flag_setting("nope", False) is False)
+check("add_minutes: a string day total counts as its number",
+      add_minutes({"days": {"2026-11-11": "5"}}, "2026-11-11", 2) == {"days": {"2026-11-11": 7}})
+check("add_minutes: a non-numeric day total counts as no minutes",
+      add_minutes({"days": {"2026-11-11": "x"}}, "2026-11-11", 2) == {"days": {"2026-11-11": 2}})
 
 print("tb-guide: %d checks passed" % pass_count)

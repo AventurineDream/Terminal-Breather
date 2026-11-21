@@ -31,6 +31,12 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   readonly property string statsPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/stats.json"
+  // Present while this plugin holds DND on for a session it started (see
+  // ZenModel.dndEngageCommand). A leftover file means a run ended without restoring DND.
+  readonly property string dndMarkerPath: Quickshell.env("HOME") + "/.local/state/omarchy/zen/dnd-engaged.json"
+  // The terminal guide's --record-stats mode writes the stats, so the bar and the
+  // SSH guide share one locked, atomic merge. Resolved from this plugin's directory.
+  readonly property string guidePath: Model.localPathOf(Qt.resolvedUrl("cli/tb-guide"))
   readonly property string patternsPath: Quickshell.env("HOME") + "/.config/omarchy/zen/patterns.json"
   readonly property string shellPath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
   readonly property string defaultLogPath: Model.meditationLogPath(Quickshell.env("HOME"))
@@ -56,8 +62,10 @@ Item {
   property var pendingStart: null
   property bool patternsReady: false
   property bool savedReady: false
+  // Set once the engage marker from an earlier run has been read (dndMarkerFile).
+  property bool dndRecovered: false
 
-  // The luotao.zen bar entry from shell.json: the panel's saved settings.
+  // The aven.terminal-breather bar entry from shell.json: the panel's saved settings.
   // A summon names only some keys; Model.sessionSettings fills the rest here.
   property var savedSettings: ({})
 
@@ -69,11 +77,14 @@ Item {
   // goes through the notifications IPC that Omarchy's own menu uses.
   property bool bellWanted: true
   property bool dndWanted: true
+  // Whether this session appends its row to the meditation log. Minutes are always
+  // recorded; meditationLogEnabled false turns off only the log row.
+  property bool logWanted: true
   property var dnd: Model.dndInitial()
 
   // DND flow. Model.dndStep decides what happens; this block feeds it the events
-  // ("start", "end", and the "probed" and "restored" results that come back from
-  // the processes below) and runs the commands it returns.
+  // ("start", "end", "recover", and the "probed" and "restored" results that come
+  // back from the processes below) and runs the commands it returns.
   Process {
     id: dndProbe
     command: Model.dndQueryCommand()
@@ -84,27 +95,43 @@ Item {
   }
 
   // A restore that cannot start emits runningChanged without exited; the
-  // reducer ignores the repeat report when exited has already answered.
+  // reducer ignores the repeat report when exited has already answered. The
+  // command removes the engage marker only when it exits 0.
   Process {
     id: dndRestoreProc
-    command: Model.dndSetCommand(false)
+    command: Model.dndRestoreCommand(root.dndMarkerPath, 0)
     onExited: (exitCode) => root.dndEvent("restored", exitCode === 0)
     onRunningChanged: if (!running) root.dndEvent("restored", false)
   }
 
   // Engage runs as a tracked process, not a detached launch, so a restore
   // that follows it can wait. A detached engage could land after the restore
-  // and leave DND on after the session ended.
+  // and leave DND on after the session ended. It writes the engage marker
+  // before turning DND on, so a crash in between is still restored at load.
   property bool restoreAfterEngage: false
+  // Pid of the engage process while it runs, else 0. Teardown reads it after
+  // dndEngageProc may already be gone.
+  property int enginePid: 0
   Process {
     id: dndEngageProc
-    command: Model.dndSetCommand(true)
+    command: Model.dndEngageCommand(root.dndMarkerPath)
+    onProcessIdChanged: root.enginePid = processId || 0
     onExited: {
+      root.enginePid = 0
       if (root.restoreAfterEngage) {
         root.restoreAfterEngage = false
         dndRestoreProc.running = true
       }
     }
+  }
+
+  // Disable, removal or a shell reload ends the session with this object, so a
+  // DND this plugin engaged is restored by a detached process that outlives it.
+  // That process waits for an engage still in flight, so the restore cannot land
+  // first and leave DND on.
+  Component.onDestruction: {
+    if (root.dnd.owned)
+      Quickshell.execDetached(Model.dndRestoreCommand(root.dndMarkerPath, root.enginePid))
   }
 
   function dndEvent(event, arg) {
@@ -126,6 +153,14 @@ Item {
 
   function applyDnd() { root.dndEvent("start") }
   function restoreDnd() { root.dndEvent("end") }
+
+  // Load-time result of the engage-marker read (dndMarkerFile). Sessions wait for
+  // it, so no session starts before a DND left on by a crashed run is restored.
+  function recoverDnd(owed) {
+    root.dndEvent("recover", owed)
+    root.dndRecovered = true
+    root.tryStart()
+  }
 
   function ring(soundFile) {
     if (!bellWanted) return
@@ -154,7 +189,7 @@ Item {
   // file's load handler calls this, so the order the reads finish in does not
   // matter.
   function tryStart() {
-    if (!root.pendingStart || !root.patternsReady || !root.savedReady) return
+    if (!root.pendingStart || !root.patternsReady || !root.savedReady || !root.dndRecovered) return
     var p = root.pendingStart
     root.pendingStart = null
     root.startSession(p)
@@ -176,6 +211,7 @@ Item {
     root.totalSecs = Math.max(10, Math.round(s.minutes * 60))
     root.bellWanted = s.bell
     root.dndWanted = s.dnd
+    root.logWanted = s.logEnabled
     root.logPath = s.logPath || root.defaultLogPath
 
     root.nowMs = Date.now()
@@ -205,18 +241,21 @@ Item {
     else root.open("{}")
   }
 
-  // Records the session's minutes in stats and the meditation log: the minutes
-  // practiced when ended early (Esc counts too: a streak kept by a short session
-  // beats one lost to perfectionism), or the full length when completed. Returns
-  // the minutes recorded, 0 under one minute.
+  // Records the session's minutes in stats and, unless the log is off, one row in
+  // the meditation log: the minutes practiced when ended early (Esc counts too: a
+  // streak kept by a short session beats one lost to perfectionism), or the full
+  // length when completed. Returns the minutes recorded, 0 under one minute.
+  // The stats write sends only these minutes. The helper merges them into the file
+  // on disk under its lock, so a stale in-memory copy never overwrites another writer.
   function recordSession(completed) {
     var minutes = Math.floor(root.elapsedSecs / 60)
     if (completed) minutes = Math.max(1, Math.round(root.totalSecs / 60))
     if (minutes >= 1) {
       var today = Qt.formatDateTime(new Date(), "yyyy-MM-dd")
       root.stats = Model.addMinutes(root.stats, today, minutes)
-      Quickshell.execDetached(Model.persistStatsCommand(root.statsPath, root.stats))
-      Quickshell.execDetached(Model.appendLogCommand(root.logPath, Model.logRow(today, root.pattern.name, minutes, completed)))
+      Quickshell.execDetached(Model.persistStatsCommand(root.guidePath, root.statsPath, today, minutes))
+      if (root.logWanted)
+        Quickshell.execDetached(Model.appendLogCommand(root.logPath, Model.logRow(today, root.pattern.name, minutes, completed)))
     }
     return minutes
   }
@@ -285,6 +324,17 @@ Item {
       root.savedReady = true
       root.tryStart()
     }
+  }
+
+  // The engage marker left by an earlier run (ZenModel.dndEngageCommand). A
+  // missing file means nothing is owed. Read once at load; sessions wait for
+  // the read (tryStart), so no session races a leftover DND restore.
+  FileView {
+    id: dndMarkerFile
+    path: root.dndMarkerPath
+    printErrors: false
+    onLoaded: root.recoverDnd(true)
+    onLoadFailed: root.recoverDnd(false)
   }
 
   Timer {

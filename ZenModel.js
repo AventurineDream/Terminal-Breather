@@ -361,14 +361,36 @@ function bellCommand(soundFile) {
 function dndQueryCommand() {
   return ["sh", "-c", 'out=$(timeout 5 omarchy-shell notifications isDnd) || exit 1; printf %s "$out"']
 }
+// Engage marker: a file present while this plugin holds DND on for a session it
+// started. The engage command writes it before DND turns on, and a restore that
+// exits 0 removes it, so a plugin disabled, removed or killed mid-session leaves
+// it for the next load to restore. Only an explicit "off" probe engages, so the
+// restore target is always "off".
+var DND_MARKER_BODY = '{"restoreTo":"off"}'
+
 /**
- * Builds argv to set the shell's Do Not Disturb state.
- * @param {boolean} on True to enable DND, false to restore notifications.
- * @returns {string[]} IPC command argv.
- * @remarks The five-second timeout prevents a hung restore from remaining in flight indefinitely.
+ * Builds argv that writes the engage marker, then turns DND on.
+ * @param {string} markerPath Absolute path of the engage marker.
+ * @returns {string[]} argv for the tracked engage process. If the marker cannot be written, DND is not turned on.
+ * @remarks `exec` makes the tracked pid the timeout process, so teardown can wait on it.
  */
-function dndSetCommand(on) {
-  return ["timeout", "5", "omarchy-shell", "notifications", "setDnd", on ? "on" : "off"]
+function dndEngageCommand(markerPath) {
+  return ["sh", "-c",
+    'mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1" && exec timeout 5 omarchy-shell notifications setDnd on',
+    "sh", markerPath, DND_MARKER_BODY]
+}
+
+/**
+ * Builds argv that turns DND off and removes the engage marker once that succeeds.
+ * @param {string} markerPath Absolute path of the engage marker.
+ * @param {number} waitPid Pid of an engage process still running, or 0. The restore waits up to 5 s for it to exit, so a restore cannot land first and leave DND on.
+ * @returns {string[]} argv; the marker is removed only when the IPC call exits 0.
+ * @remarks The wait loop is bounded to 100 polls of 50 ms, matching the five-second IPC timeout.
+ */
+function dndRestoreCommand(markerPath, waitPid) {
+  return ["sh", "-c",
+    'if [ "$2" -gt 0 ] 2>/dev/null; then i=0; while kill -0 "$2" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i+1)); done; fi; timeout 5 omarchy-shell notifications setDnd off && rm -f -- "$1"',
+    "sh", markerPath, String(waitPid || 0)]
 }
 
 /**
@@ -383,13 +405,14 @@ function dndState(stdout) {
 
 // DND ownership as a pure step. The overlay feeds it events and runs the effects
 // it returns, so every transition can be tested here. State: {owned, busy, pendingProbe}.
-//   owned        DND is ours: this session engaged it, or a restore is still owed
-//                after a failed one. Set only after a probe reads "off"; cleared
-//                only by a restore that exited 0.
+//   owned        DND is ours: this session engaged it, an earlier run's engage marker
+//                says so, or a restore is still owed after a failed one. Set only after
+//                a probe reads "off" (or from a marker); cleared only by a restore that exited 0.
 //   busy         a restore process is in flight; its result arrives as "restored".
 //   pendingProbe a session started while a restore was in flight; it probes once the
 //                restore settles, so it never reads DND still switching off.
 // Events: "start" (a session begins), "end" (a session ends or is replaced),
+// "recover" (arg: an engage marker from an earlier run exists; load-time only),
 // "probed" (arg: dndState of the query output), "restored" (arg: true if the
 // restore exited 0). live: a session is running; wanted: this session wants DND.
 // Returns {state, effects}; effects are "probe", "restore", "engage" and "refresh".
@@ -405,7 +428,7 @@ function dndInitial() {
 /**
  * Reduces a DND lifecycle event to a new state and requested shell effects.
  * @param {Object} st Prior state from `dndInitial` or a previous result.
- * @param {string} event `start`, `end`, `probed`, or `restored`.
+ * @param {string} event `start`, `end`, `recover`, `probed`, or `restored`.
  * @param {boolean} live Whether a breathing session is active.
  * @param {boolean} wanted Whether this session requests DND.
  * @param {string|boolean} arg Probe state (`on`/`off`/`unknown`) or restore success.
@@ -426,6 +449,11 @@ function dndStep(st, event, live, wanted, arg) {
   } else if (event === "end") {
     restore()
     s.pendingProbe = false
+  } else if (event === "recover") {
+    // Load-time only, before any session: an engage marker from an earlier run
+    // means that run turned DND on and never restored it, so the restore is owed.
+    if (arg) s.owned = true
+    restore()
   } else if (event === "probed") {
     // Only an explicit "off" is engaged: "on" is the user's own DND, and
     // "unknown" must leave DND exactly as it was.
@@ -447,14 +475,33 @@ function dndStep(st, event, live, wanted, arg) {
   return { state: s, effects: fx }
 }
 
-// Argv for persisting the stats file; JSON travels as a positional arg so it
-// is data to the shell, never syntax.
-function persistStatsCommand(path, stats) {
-  return [
-    "sh", "-c",
-    'mkdir -p "$(dirname "$1")" && printf %s "$2" > "$1"',
-    "sh", path, JSON.stringify(stats)
-  ]
+// ---- Shared stats file. omarchy-zen writes the same file, and so may another
+// session or the terminal guide, so no writer sends a whole snapshot that could
+// be stale. The bar sends only this session's minutes; `tb-guide --record-stats`
+// re-reads the file under a lock, adds them, and replaces the file atomically.
+// The format is the compact {"days":{...}} that JSON.stringify writes.
+
+/**
+ * Converts a file:// URL, as Qt.resolvedUrl returns one, to a local path.
+ * @param {string} url URL of a file shipped with the plugin.
+ * @returns {string} Decoded absolute path, or "" when the input is not a file URL.
+ */
+function localPathOf(url) {
+  var s = String(url || "")
+  if (s.indexOf("file://") !== 0) return ""
+  try { return decodeURIComponent(s.slice("file://".length)) } catch (e) { return "" }
+}
+
+/**
+ * Builds argv that adds one session's minutes to the shared stats file.
+ * @param {string} guidePath Absolute path of cli/tb-guide.
+ * @param {string} statsPath Absolute path of stats.json.
+ * @param {string} dayKey Local date, YYYY-MM-DD.
+ * @param {number} minutes Whole minutes (at least 1) to add to that day.
+ * @returns {string[]} argv; the helper merges with the file on disk, so minutes from other writers are kept.
+ */
+function persistStatsCommand(guidePath, statsPath, dayKey, minutes) {
+  return ["python3", guidePath, "--record-stats", statsPath, dayKey, String(minutes)]
 }
 
 // ---- Obsidian meditation log. One row per session, appended to a Markdown
@@ -465,7 +512,8 @@ function persistStatsCommand(path, stats) {
 // in the plugin settings (meditationLogPath). A missing file is created
 // with the table header first, so a moved vault still gets a readable log.
 // A missing folder is left alone — the append then fails silently rather
-// than scattering a log somewhere the vault is not.
+// than scattering a log somewhere the vault is not. meditationLogEnabled set
+// to false turns the log off; practice minutes are still recorded.
 
 var MEDITATION_LOG_HEADER = "# Meditation Log\n\nSessions logged by Terminal-Breather (fork of luotao.zen) — one row per session, appended automatically when a session ends.\n\n| Date | Pattern | Minutes | Completed |\n| --- | --- | --- | --- |"
 
@@ -542,7 +590,7 @@ function flagSetting(value, fallback) {
 }
 
 /**
- * Finds the first `luotao.zen` bar entry in recursive shell.json traversal order.
+ * Finds the first `aven.terminal-breather` bar entry in recursive shell.json traversal order.
  * @param {string} raw Serialized shell configuration.
  * @returns {Object} The first matching entry, or `{}` for malformed/missing input; duplicates are not merged.
  */
@@ -554,7 +602,7 @@ function barEntrySettings(raw) {
       return false
     }
     if (node && typeof node === "object") {
-      if (node.id === "luotao.zen") { found = node; return true }
+      if (node.id === "aven.terminal-breather") { found = node; return true }
       for (var k in node) if (walk(node[k])) return true
     }
     return false
@@ -584,9 +632,9 @@ var MAX_SESSION_MINUTES = 120
 /**
  * Resolves session settings in payload → saved bar entry → built-in default order.
  * @param {Object} payload Explicit summon settings; omitted values inherit.
- * @param {Object} saved Settings from the luotao.zen bar entry.
+ * @param {Object} saved Settings from the aven.terminal-breather bar entry.
  * @param {string} home Quickshell's HOME, used to normalize a log path.
- * @returns {{pattern: string, minutes: number, bell: boolean, dnd: boolean, animation: string, logPath: string}} Session settings; `minutes` is in minutes and capped at 120.
+ * @returns {{pattern: string, minutes: number, bell: boolean, dnd: boolean, animation: string, logPath: string, logEnabled: boolean}} Session settings; `minutes` is in minutes and capped at 120.
  */
 function sessionSettings(payload, saved, home) {
   var p = payload || {}
@@ -601,6 +649,7 @@ function sessionSettings(payload, saved, home) {
     bell: flagSetting(p.bell, flagSetting(s.bell, true)),
     dnd: flagSetting(p.dnd, flagSetting(s.dnd, true)),
     animation: p.animation || s.animation || "random",
-    logPath: usableLogPath(p.logPath, home) || usableLogPath(s.meditationLogPath, home) || ""
+    logPath: usableLogPath(p.logPath, home) || usableLogPath(s.meditationLogPath, home) || "",
+    logEnabled: flagSetting(p.logEnabled, flagSetting(s.meditationLogEnabled, true))
   }
 }

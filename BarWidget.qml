@@ -112,6 +112,7 @@ Panel {
       pattern: patternKey || chosenPattern,
       minutes: minutes || chosenMinutes,
       bell: Model.flagSetting(setting("bell", true), true),
+      logEnabled: Model.flagSetting(setting("meditationLogEnabled", true), true),
       dnd: Model.flagSetting(setting("dnd", true), true),
       logPath: setting("meditationLogPath", "") || "",
       animation: chosenAnimation
@@ -444,8 +445,8 @@ Panel {
           font.pixelSize: Style.font.bodySmall
         }
 
-        // Settings: figure picker, bell, do-not-disturb, and the
-        // meditation-log path. Collapsed by default so the session
+        // Settings: figure picker, bell, do-not-disturb, the meditation log
+        // on/off switch, and its file path. Collapsed by default so the session
         // setup stays the focus; every change writes back to shell.json
         // via updateEntryInline, so it is the default from then on.
         Column {
@@ -555,6 +556,33 @@ Panel {
 
             Text {
               text: "Meditation log"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(6)
+              Button {
+                text: "On"
+                bordered: true
+                selected: Model.flagSetting(root.settingValue("meditationLogEnabled", true), true)
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("meditationLogEnabled", true)
+              }
+              Button {
+                text: "Off"
+                bordered: true
+                selected: !Model.flagSetting(root.settingValue("meditationLogEnabled", true), true)
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.updateSetting("meditationLogEnabled", false)
+              }
+            }
+
+            Text {
+              text: "Log file"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall

@@ -18,7 +18,7 @@ Guided breathing for the Omarchy shell. Follow an animated ASCII planet or geome
 - **Bar controls:** choose a pattern, duration, and figure, or middle-click to start the saved defaults.
 - **Terminal mode:** the `tb` command provides a breathing guide in an SSH terminal; `--gui` and `--term` choose the mode explicitly.
 - **Session history:** records practice minutes and daily streaks; optional Obsidian logging records completed or early-ended sessions of at least one minute.
-- **Optional comforts:** a start/end bell and Do Not Disturb, with the previous DND state restored after the session.
+- **Optional comforts:** a start/end bell and Do Not Disturb, with the previous DND state restored after the session. If the plugin is disabled, removed, or crashes mid-session, the next load turns DND back off.
 - **Optional Pomodoro pairing:** OmaPomodorchy can open a selected breathing pattern when a break begins.
 
 ## Patterns
@@ -33,7 +33,7 @@ Guided breathing for the Omarchy shell. Follow an animated ASCII planet or geome
 
 - Omarchy Quattro or later
 - Obsidian (optional) — only if you want session rows in a meditation log; practice minutes and streaks are tracked in the plugin's own state either way
-- Python 3 (optional) — only for the `tb-guide` terminal guide
+- Python 3 — records practice minutes from the bar (through `tb-guide --record-stats`) and runs the optional `tb-guide` terminal guide
 
 ## Install
 
@@ -100,16 +100,19 @@ An optional `ramp` changes the phase tempo over the start of a session. `from` a
 
 ## Settings and history
 
-The panel's **Settings** section controls the figure, bell, Do Not Disturb, and meditation-log path. These values are saved for the next session. The same options can be set through Omarchy:
+The panel's **Settings** section controls the figure, bell, Do Not Disturb, the meditation-log on/off switch, and its file path. These values are saved for the next session. The same options can be set through Omarchy:
 
 ```bash
 omarchy bar set aven.terminal-breather bell false
 omarchy bar set aven.terminal-breather dnd false
 omarchy bar set aven.terminal-breather animation jupiter
 omarchy bar set aven.terminal-breather meditationLogPath "$HOME/notes/meditation.md"
+omarchy bar set aven.terminal-breather meditationLogEnabled false
 ```
 
-Practice minutes and streaks are stored in Omarchy's local plugin state. The optional meditation log appends a row for sessions of at least one minute, including sessions ended early. With `meditationLogPath` empty, the log is `~/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md`; set it to any absolute path to use another note. The log does not create a missing parent folder: if the folder is absent, the row is skipped silently.
+Practice minutes and streaks are stored in `stats.json` under Omarchy's local plugin state (`~/.local/state/omarchy/zen/`). That is the same file omarchy-zen uses, so both plugins share one history. Each write re-reads the file under a lock, adds the new minutes, and replaces the file atomically, so concurrent sessions and `tb-guide` do not lose each other's entries. omarchy-zen writes its file without that lock, so its own writes can still overwrite a concurrent update.
+
+The optional meditation log appends a row for sessions of at least one minute, including sessions ended early. Set `meditationLogEnabled` to `false` to turn it off; minutes and streaks are still counted. With `meditationLogPath` empty, the log is `~/Projects/Obsidian/Aventurine/20_Practices/Meditation/Meditation Log.md`; set it to any absolute path to use another note. The log does not create a missing parent folder: if the folder is absent, the row is skipped silently.
 
 ## Video
 
@@ -122,6 +125,10 @@ Practice minutes and streaks are stored in Omarchy's local plugin state. The opt
 - Plugin id renamed `luotao.zen` → `aven.terminal-breather` (the upstream already holds `luotao.zen` in the marketplace). Existing installs must remove the plugin and re-add it under the new id; patterns and stats under `~/.config/omarchy/zen/` and `~/.local/state/omarchy/zen/` are unchanged.
 - The default meditation-log path follows the vault rename: `~/Projects/Obsidian/Home/…` → `~/Projects/Obsidian/Aventurine/…`.
 - Hardened session inputs: phase, ramp, and session durations are bounded, and custom-pattern validation matches the overlay. A Do Not Disturb restore now waits for the engage step, so DND can no longer be left on after a session.
+- Practice minutes are merged into the shared `stats.json` under a lock and written atomically: the bar hands its minutes to `tb-guide --record-stats`, so concurrent sessions, the terminal guide, and a crash mid-write no longer lose or truncate history. The file format is unchanged.
+- Do Not Disturb is restored after an abrupt disable, removal, or crash. The engage step writes `~/.local/state/omarchy/zen/dnd-engaged.json` before turning DND on; the next load turns DND back off when that file is present.
+- New `meditationLogEnabled` setting (default on) turns off the Obsidian meditation log. Minutes and streaks are still counted. The Settings panel has an On/Off switch, and `tb-guide` honours the same key.
+- The saved bar settings are read from the `aven.terminal-breather` entry again. The overlay had still looked up the old `luotao.zen` id after the rename, so saved settings were ignored for summons that name only some keys.
 
 ### 0.8.2
 
